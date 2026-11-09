@@ -7,7 +7,7 @@ That needs three free accounts. Do them in this order, because each step uses so
 | Step | Account | What it's for | Cost |
 | --- | --- | --- | --- |
 | 1 | Supabase | Stores the sheets and runs the code that sends messages | Free plan |
-| 2 | Cloudflare | A public web address, so friends' phones can open their link | Free |
+| 2 | Cloudflare | A public web address, so friends' phones can open their link, rebuilt on every push to GitHub | Free |
 | 3 | Meta for Developers | Marmoot's WhatsApp number | Free test number for up to 5 people |
 
 Want to see it all work first, with no accounts? Run `npm run local` (section 0). It runs everything on your computer, with a pretend WhatsApp inbox.
@@ -54,27 +54,22 @@ Ctrl+C stops it and deletes everything.
 
 ## 2. Cloudflare Pages (the public web address)
 
-1. Create a free account at [dash.cloudflare.com](https://dash.cloudflare.com/sign-up).
-2. In the repo, create the file `apps/web/.env.local` with your two values from step 1:
+With the code on GitHub, let Cloudflare build it on every push:
 
-   ```
-   VITE_SUPABASE_URL=https://<ref>.supabase.co
-   VITE_SUPABASE_ANON_KEY=sb_publishable_...
-   ```
+1. In [dash.cloudflare.com](https://dash.cloudflare.com), go to **Workers & Pages → Create → Pages → Import an existing Git repository**. Connect GitHub, allow access to the `marmoot` repo, and pick it.
+2. Build settings:
+   - **Project name:** `marmoot` (your address becomes `https://marmoot.pages.dev`, or `marmoot-xyz.pages.dev` if the name is taken)
+   - **Framework preset:** None
+   - **Build command:** `npm run build`
+   - **Build output directory:** `apps/web/dist`
+   - **Environment variables:** `VITE_SUPABASE_URL` = your Project URL, `VITE_SUPABASE_ANON_KEY` = your publishable key, `NODE_VERSION` = `22`
+3. **Save and Deploy.** The first build takes a couple of minutes. After that, every `git push` to `main` updates the site.
 
-3. Create the site, then publish it:
+Open the address on your phone. This is now your Marmoot. Your existing groups stay on the device where you made them, so open the new address and create your group there. Add each person's WhatsApp number under **People**, with the country code (+91 for India).
 
-   ```powershell
-   npx wrangler@4 login
-   npx wrangler@4 pages project create marmoot --production-branch main
-   npm run deploy:web
-   ```
+For running the app on your computer against the same database, create `apps/web/.env.local` with those two `VITE_` lines too.
 
-   `login` opens your browser to approve. The last command builds the app and prints its address, such as `https://marmoot.pages.dev` (or `marmoot-xyz.pages.dev` if that name is taken).
-
-4. Open that address on your phone. This is now your Marmoot. Your existing groups stay on the device where you made them, so open the new address and create your group there. Add each person's WhatsApp number under **People**, with the country code (+91 for India).
-
-Run `npm run deploy:web` again whenever the app changes.
+No GitHub? Upload from your computer instead: put the two `VITE_` lines in `apps/web/.env.local`, then run `npx wrangler@4 login`, `npx wrangler@4 pages project create marmoot --production-branch main` and `npm run deploy:web`.
 
 ## 3. Marmoot's WhatsApp number (Meta)
 
