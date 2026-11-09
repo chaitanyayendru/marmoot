@@ -25,6 +25,7 @@ import { handleSendBillAlerts } from '../functions/send-bill-alerts/handler.ts';
 import type { Env } from '../functions/_shared/whatsapp.ts';
 import { handleWhatsAppWebhook } from '../functions/whatsapp-webhook/handler.ts';
 import { applySchema, startCluster, stopCluster, supabaseDir } from '../tests/pg.ts';
+import { TEMPLATE_BODY } from '../whatsapp-template.ts';
 
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf('--port') + 1] || process.env.LOCAL_PORT || 54321) || 54321;
@@ -110,7 +111,7 @@ function fakeSend(payload: any): { status: number; body: unknown } {
   const id = `wamid.local.${inbox.length + 1}`;
   inbox.unshift({
     id, to: `+${to}`, token, at: new Date(), status: 'sent',
-    text: `${owner} shared a bill with you: ${title}, ${total} in total. Tap below to pick the items you were part of. Everyone splits only what they had.`,
+    text: TEMPLATE_BODY.replace('{{1}}', owner).replace('{{2}}', title).replace('{{3}}', total),
   });
   setTimeout(() => void webhook(id, 'delivered'), 1200);
   return { status: 200, body: { messaging_product: 'whatsapp', messages: [{ id }] } };

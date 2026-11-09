@@ -11,6 +11,7 @@
   "include": [
     "*.ts",
     "../local/*.ts",
-    "../setup-sql.ts"
+    "../setup-sql.ts",
+    "../whatsapp-template.ts"
   ]
 }

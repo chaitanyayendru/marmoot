@@ -34,7 +34,7 @@ export async function handleSendBillAlerts(req: Request, env: Env, fetchImpl: ty
     return json({ error: 'not_allowed', message: (e as Error).message }, status === 400 || status === 403 || status === 404 ? 403 : 500);
   }
 
-  const graph = env.WA_GRAPH_URL || 'https://graph.facebook.com/v23.0';
+  const graph = env.WA_GRAPH_URL || 'https://graph.facebook.com/v25.0';
   const sent: string[] = [];
   const failed: { name: string; error: string }[] = [];
   for (const a of alerts) {

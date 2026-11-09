@@ -35,12 +35,22 @@ Ctrl+C stops it and deletes everything.
 ## 1. Supabase
 
 1. Go to [supabase.com](https://supabase.com), sign up, and create a **New project**: name it `marmoot`, set a database password (save it), and pick the region nearest you. The free plan is fine.
-2. Open **SQL Editor**, click **New query**, paste the whole of `supabase/setup.sql` from the repo, and click **Run**. You should see "Success. No rows returned". Run it once only.
-3. Note two values:
-   - **Project URL**: `https://<ref>.supabase.co`. The `<ref>` part is also in the dashboard address, after `/project/`. You need it in step 3.
+2. Note two values from the project:
+   - **Project URL**: `https://<ref>.supabase.co`. The `<ref>` part is also in the dashboard address, after `/project/`.
    - **Publishable key**: under **Project Settings → API Keys**, `sb_publishable_…`. On an older project, use the **anon** key under Legacy API keys.
 
-Both are safe to put in the web app. The database checks every request against the sheet's secret links.
+   Both are safe to put in the web app. The database checks every request against the sheet's secret links.
+3. Put the schema in the project. Skip `supabase init`: the repo already has its `supabase` folder.
+
+   ```powershell
+   npx supabase@latest login
+   npx supabase@latest link --project-ref <ref>
+   npx supabase@latest db push --remote
+   ```
+
+   `db push` asks for the database password from step 1 and applies every migration in `supabase/migrations`. Later changes go out the same way.
+
+   No CLI? You can instead paste all of `supabase/setup.sql` into **SQL Editor → New query** and click **Run**, once.
 
 ## 2. Cloudflare Pages (the public web address)
 
@@ -80,32 +90,30 @@ Run `npm run deploy:web` again whenever the app changes.
 
 ### 3b. Create the message template
 
-WhatsApp only lets a business start a conversation with an approved template.
+WhatsApp only lets a business start a conversation with an approved template. This creates it through Meta's API, so there's nothing to fill in by hand. Use the access token and the **Messaging account ID** shown in API Setup, and your Cloudflare address from step 2:
 
-1. Go to [business.facebook.com](https://business.facebook.com) → **WhatsApp Manager** → **Message templates** → **Create template**. If you have more than one WhatsApp account, pick the one with the test number.
-2. Fill it in exactly:
-   - **Category:** Utility
-   - **Name:** `bill_ready`
-   - **Language:** English (US)
-   - **Body:**
+```powershell
+$env:WA_TOKEN = "<access token>"
+$env:WA_WABA_ID = "<Messaging account ID>"
+$env:APP_URL = "https://<your Cloudflare address>"
+npm run wa:template
+```
 
-     ```
-     {{1}} shared a bill with you: {{2}}, {{3}} in total. Tap below to pick the items you were part of. Everyone splits only what they had.
-     ```
+It prints `PENDING`, `APPROVED` or why Meta refused it. Run `npm run wa:template` again a few minutes later to check. Meta usually approves within minutes, sometimes a few hours.
 
-     Samples: `Chai`, `Costco`, `$33.39`
-   - **Button:** Call to action → **Visit website**. Button text `Open the bill`, URL type **Dynamic**, URL `https://<your Cloudflare address>/?s={{1}}`. Sample: `https://<your Cloudflare address>/?s=abc123`.
-3. Submit. Wait until its status is **Active**.
+It creates this template, if you'd rather check it in WhatsApp Manager → Message templates:
+- **Name:** `bill_ready`, **Category:** Utility, **Language:** English (US)
+- **Body:** `Hi! {{1}} shared a bill with you: {{2}}, {{3}} in total. Tap below to pick the items you were part of. Everyone splits only what they had.`
+- **Button:** Visit website, "Open the bill", dynamic URL `https://<your Cloudflare address>/?s={{1}}`
 
 ### 3c. Give the keys to Supabase and deploy the functions
 
-Replace each `<…>`. `WA_VERIFY_TOKEN` is any long phrase you make up; you'll type it into Meta in 3d.
+Replace each `<…>`. `WA_VERIFY_TOKEN` is any long phrase you make up; you'll type it into Meta in 3d. These commands use the project you linked in step 1.
 
 ```powershell
-npx supabase@latest login
-npx supabase@latest secrets set --project-ref <ref> WA_TOKEN=<access token> WA_PHONE_NUMBER_ID=<phone number ID> WA_APP_SECRET=<app secret> WA_VERIFY_TOKEN=<your phrase>
-npx supabase@latest functions deploy send-bill-alerts --project-ref <ref> --no-verify-jwt --use-api
-npx supabase@latest functions deploy whatsapp-webhook --project-ref <ref> --no-verify-jwt --use-api
+npx supabase@latest secrets set WA_TOKEN=<access token> WA_PHONE_NUMBER_ID=<phone number ID> WA_APP_SECRET=<app secret> WA_VERIFY_TOKEN=<your phrase>
+npx supabase@latest functions deploy send-bill-alerts --no-verify-jwt --use-api
+npx supabase@latest functions deploy whatsapp-webhook --no-verify-jwt --use-api
 ```
 
 `--use-api` means no Docker is needed.
@@ -125,7 +133,7 @@ The token from 3a stops working after 24 hours. You'll see "The WhatsApp access 
 1. In [business.facebook.com](https://business.facebook.com): **Settings → Users → System users → Add**, role **Admin**.
 2. **Assign assets**: the Marmoot app (full control) and the WhatsApp account.
 3. **Generate new token**: pick the Marmoot app, never expire, with permissions `whatsapp_business_messaging` and `whatsapp_business_management`.
-4. `npx supabase@latest secrets set --project-ref <ref> WA_TOKEN=<new token>`
+4. `npx supabase@latest secrets set WA_TOKEN=<new token>`
 
 ## 4. Try it for real
 

@@ -4,12 +4,12 @@
  *
  * The message is one approved template (WA_TEMPLATE, "bill_ready" by default):
  *
- *   Body:   {{1}} shared a bill with you: {{2}}, {{3}} in total. Tap below to pick
- *           the items you were part of. Everyone splits only what they had.
+ *   Body:   Hi! {{1}} shared a bill with you: {{2}}, {{3}} in total. Tap below to
+ *           pick the items you were part of. Everyone splits only what they had.
  *   Button: "Open the bill", a URL button whose link ends in the person's token:
  *           https://<your app>/?s={{1}}
  *
- * See docs/SHARING-SETUP.md for creating it in WhatsApp Manager.
+ * supabase/whatsapp-template.ts creates it through Meta's API (npm run wa:template).
  */
 
 export interface Env {

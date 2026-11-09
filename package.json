@@ -21,7 +21,8 @@
     "local": "node --experimental-strip-types --no-warnings supabase/local/stack.ts",
     "test:functions": "deno test --allow-net supabase/functions",
     "setup-sql": "node --experimental-strip-types --no-warnings supabase/setup-sql.ts",
-    "deploy:web": "npm run build && npx wrangler@4 pages deploy apps/web/dist --project-name marmoot"
+    "deploy:web": "npm run build && npx wrangler@4 pages deploy apps/web/dist --project-name marmoot",
+    "wa:template": "node --experimental-strip-types --no-warnings supabase/whatsapp-template.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
