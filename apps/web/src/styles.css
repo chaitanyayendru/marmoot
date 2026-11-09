@@ -1,0 +1,275 @@
+/*
+  Marmoot: a card table late at night.
+  Felt green base, chalk text, brass for money owed to you, chip red for money you owe.
+  One typeface (Archivo, variable width). Money is always set wide and tabular;
+  that expanded figure is the one loud thing in the design.
+*/
+:root {
+  --felt: #17302a;
+  --rail: #0f211c;
+  --line: #2d4c43;
+  --chalk: #eeebe2;
+  --muted: #9ab2a7;
+  --brass: #ddb15e;
+  --brass-ink: #182820;
+  --red: #ef7e6e;
+  --radius: 12px;
+  color-scheme: dark;
+  font-family: 'Archivo Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 100%;
+  line-height: 1.45;
+  color: var(--chalk);
+  background: var(--felt);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+html { background: var(--felt); }
+body {
+  /* The lamp over the table: a little more light at the top of the felt.
+     Anchored to the page, not fixed: iOS ignores fixed backgrounds. */
+  background: radial-gradient(ellipse 140% 32rem at 50% -6rem, #21443a, var(--felt)) no-repeat;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, p { margin: 0; }
+a { color: var(--brass); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.page {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 5rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* Type */
+.wordmark {
+  font-size: 2.6rem;
+  font-weight: 800;
+  font-stretch: 125%;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.lede { color: var(--muted); max-width: 34ch; margin-top: 0.6rem; }
+.night-head h1 { font-size: 1.85rem; font-weight: 700; font-stretch: 112%; line-height: 1.1; }
+.pot { color: var(--muted); margin-top: 0.35rem; }
+.pot .num { color: var(--chalk); }
+h2 { font-size: 1.05rem; font-weight: 650; }
+.num {
+  font-variant-numeric: tabular-nums;
+  font-stretch: 125%;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.big { font-size: 2rem; font-weight: 750; line-height: 1.1; }
+.up { color: var(--brass); }
+.down { color: var(--red); }
+.even, .muted { color: var(--muted); }
+.fine { font-size: 0.85rem; color: var(--muted); }
+
+/* Controls */
+button, .button {
+  font: inherit;
+  color: var(--chalk);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  min-height: 44px;
+  padding: 0.55rem 1.1rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+.primary { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 650; }
+.link {
+  border: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  color: var(--brass);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  display: inline;
+}
+.danger { color: var(--red); }
+:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+
+input {
+  font: inherit;
+  color: var(--chalk);
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  min-height: 44px;
+  padding: 0.6rem 0.8rem;
+  width: 100%;
+}
+input::placeholder { color: #6f877c; }
+input[aria-invalid='true'] { border-color: var(--red); }
+input[type='radio'], input[type='checkbox'] { width: 1.15rem; height: 1.15rem; min-height: 0; accent-color: var(--brass); margin: 0; flex: none; }
+
+.field { display: grid; gap: 0.3rem; }
+.field > span { font-size: 0.9rem; color: var(--muted); }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 0.6rem; }
+legend { font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem; padding: 0; }
+.choice label, .check { display: flex; gap: 0.6rem; align-items: center; min-height: 44px; }
+
+/* Home */
+.start { background: var(--rail); border-radius: 16px; padding: 1.25rem; display: grid; gap: 1rem; }
+.history ul { list-style: none; padding: 0; margin: 0.6rem 0 0; }
+.history li + li { border-top: 1px solid var(--line); }
+.history a {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 1rem;
+  padding: 0.85rem 0;
+  color: var(--chalk);
+  text-decoration: none;
+}
+.h-name { font-weight: 600; }
+.h-meta { color: var(--muted); font-size: 0.9rem; grid-column: 1; }
+.h-pot { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+
+/* Night */
+.crumbs a { font-size: 0.95rem; }
+.steps { list-style: none; display: flex; gap: 0.4rem; padding: 0; margin: 0; border-bottom: 1px solid var(--line); }
+.steps a {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 0.4rem 0.7rem;
+  margin-bottom: -1px;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+.steps a[aria-current='step'] { color: var(--chalk); border-bottom-color: var(--brass); }
+.step-n {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.steps a[aria-current='step'] .step-n { background: var(--brass); border-color: var(--brass); color: var(--brass-ink); }
+
+.mode { color: var(--muted); }
+.mode strong { color: var(--chalk); font-weight: 600; }
+
+.roster { list-style: none; padding: 0; margin: 0; }
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.who {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  min-height: 44px;
+  background: none;
+  display: grid;
+  justify-items: start;
+  justify-content: start;
+  align-content: center;
+  text-align: left;
+  gap: 0.15rem;
+}
+.who-name { font-weight: 600; font-size: 1.05rem; }
+.who-meta { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.88rem; }
+.tag { border: 1px solid var(--brass); color: var(--brass); border-radius: 999px; padding: 0 0.45rem; font-size: 0.75rem; line-height: 1.4; }
+.amt { font-size: 1.15rem; }
+
+/* A buy-in button that looks like the chip it buys. */
+.buy {
+  background: var(--brass);
+  color: var(--brass-ink);
+  border: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 4.6rem;
+  box-shadow: inset 0 0 0 3px var(--brass), inset 0 0 0 5px rgba(24, 40, 32, 0.4);
+}
+.buy:active { transform: translateY(1px); }
+
+.chips { display: inline-flex; align-items: center; padding-left: 4px; }
+/* Overlapping like a short stack of chips. */
+.chip { width: 13px; height: 13px; border-radius: 50%; background: var(--brass); border: 2px solid var(--felt); margin-left: -4px; box-shadow: inset 0 0 0 2px rgba(24, 40, 32, 0.35); }
+.chip-more { font-size: 0.75rem; color: var(--brass); margin-left: 0.3rem; }
+
+.add { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
+.recent h2 { font-size: 0.95rem; color: var(--muted); font-weight: 500; }
+.recent ul { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.35rem; }
+.recent li { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.95rem; }
+.next { width: 100%; min-height: 52px; font-size: 1.05rem; }
+
+.notice { padding: 0.65rem 0.85rem; border-left: 3px solid var(--brass); background: rgba(221, 177, 94, 0.08); border-radius: 0 8px 8px 0; }
+.notice.warn { border-left-color: var(--red); background: rgba(239, 126, 110, 0.1); }
+
+/* Cash out */
+.cashout .row { grid-template-columns: 1fr 7.5rem 5.5rem; }
+.money { text-align: right; font-size: 1.05rem; }
+.preview { text-align: right; font-size: 0.95rem; }
+.tally { display: grid; gap: 0.6rem; color: var(--muted); }
+.tally .num { color: var(--chalk); }
+
+/* Settle */
+.settle-head { display: grid; gap: 0.3rem; }
+.settle-head h2 { font-size: 1.4rem; font-weight: 700; font-stretch: 110%; }
+.transfers { list-style: none; padding: 0; margin: 0; }
+.transfers li { padding: 1rem 0; border-top: 1px solid var(--line); display: grid; gap: 0.35rem; }
+.who-pays { color: var(--muted); }
+.who-pays span { color: var(--chalk); font-weight: 600; }
+.owed { color: var(--chalk); }
+.via { color: var(--muted); font-size: 0.9rem; min-height: 1em; }
+.pay-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; margin-top: 0.25rem; }
+.paid-toggle { min-height: 44px; }
+.transfers li.paid .owed { text-decoration: line-through; color: var(--muted); }
+.transfers li.paid .who-pays, .transfers li.paid .via { opacity: 0.6; }
+.transfers li.paid .pay-actions .primary { background: transparent; color: var(--muted); border-color: var(--line); }
+.progress { text-align: center; }
+.share { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.share > * { flex: 1 1 12rem; }
+
+.working { border-top: 1px solid var(--line); padding-top: 0.9rem; overflow-x: auto; }
+.working summary { cursor: pointer; color: var(--brass); min-height: 44px; display: flex; align-items: center; }
+.working table { border-collapse: collapse; width: 100%; font-size: 0.88rem; margin: 0.5rem 0; }
+.working th, .working td { padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.working th[scope='row'], .working thead th:first-child { text-align: left; }
+.working thead th { color: var(--muted); font-weight: 500; }
+.working .num { font-stretch: 100%; font-weight: 500; }
+
+/* Player sheet */
+.sheet {
+  width: min(32rem, calc(100vw - 1.5rem));
+  max-height: calc(100dvh - 2rem);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--felt);
+  color: var(--chalk);
+  padding: 1.25rem;
+}
+.sheet::backdrop { background: rgba(5, 12, 10, 0.7); }
+.sheet form { display: grid; gap: 1rem; }
+.sheet h2 { font-size: 1.35rem; font-stretch: 112%; }
+.apps { gap: 0.75rem; }
+.sheet-actions { display: flex; gap: 0.6rem; }
+.sheet-actions .primary { flex: 1; }
+
+@media (max-width: 380px) {
+  .cashout .row { grid-template-columns: 1fr 6.5rem; }
+  .cashout .preview { grid-column: 2; }
+}
