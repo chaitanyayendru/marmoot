@@ -1,5 +1,16 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "module": "nodenext", "moduleResolution": "nodenext", "types": ["node"], "noEmit": true },
-  "include": ["*.ts"]
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": [
+      "node"
+    ],
+    "noEmit": true
+  },
+  "include": [
+    "*.ts",
+    "../local/*.ts",
+    "../setup-sql.ts"
+  ]
 }

@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { splitAmount, SplitError, type Split } from '@marmoot/core';
 import { parseDollars, usd } from '../money.ts';
 import { advance, CATEGORIES, newId, today, type Category, type ExpenseItem, type Group, type Recurring } from '../model.ts';
+import { api } from '../apiClient.ts';
 import { CategoryIcon, Sheet } from './bits.tsx';
+import { prefillSheet } from './NewSheet.tsx';
 
 type Method = Split['method'];
 const METHODS: { id: Method; label: string }[] = [
@@ -117,6 +119,20 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
           <span>What for</span>
           <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Costco run, October electricity" />
         </label>
+
+        {api && (
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              prefillSheet({ title: description.trim(), amount: total, category, among });
+              onClose();
+              window.location.hash = `/g/${group.id}/sheet/new`;
+            }}
+          >
+            Several items? Send a bill sheet so each person picks theirs
+          </button>
+        )}
 
         <fieldset className="chips-pick" aria-label="Category">
           {CATEGORIES.map((c) => (

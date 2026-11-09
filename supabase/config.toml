@@ -1,0 +1,10 @@
+# Supabase CLI settings. Only what Marmoot needs; everything else keeps its default.
+project_id = "marmoot"
+
+# Bill sheet functions check the sheet's owner token themselves, and Meta calls the
+# webhook without a Supabase key, so neither needs a Supabase JWT.
+[functions.send-bill-alerts]
+verify_jwt = false
+
+[functions.whatsapp-webhook]
+verify_jwt = false

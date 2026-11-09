@@ -1,6 +1,8 @@
 # Marmoot
 
-Split the bills you share (groceries, rent, utilities, trips, dinners, game nights) and settle up in the fewest payments, using the payment apps people actually have. Reminders and new expenses go out over WhatsApp in one tap.
+Split the bills you share (groceries, rent, utilities, trips, dinners, game nights) and settle up in the fewest payments, using the payment apps people actually have.
+
+For a shop with many items, send a **bill sheet**: Marmoot messages each person on WhatsApp from its own number, with a link to their part. Each person unticks what they weren't part of (tomatoes yes, onions no). You see who's answered, and the totals land in the group when you close it.
 
 **Architecture plan:** [Marmoot — Architecture Plan](https://claude.ai/artifact/SSLhp5ZqqQxMoLDa9Hd8Bz)
 
@@ -10,8 +12,11 @@ Split the bills you share (groceries, rent, utilities, trips, dinners, game nigh
 | --- | --- |
 | `packages/core` | Settlement core: money math, expense splits (equal, exact, percent, shares), repeating-bill dates, poker nights, itemized bills, the fewest-transfer solver. No dependencies; runs in Node, Deno (Supabase Edge Functions) and the browser. |
 | `apps/web` | The web app (React + Vite, installable on a phone), in light and dark. Groups with expenses, payments, repeating bills and optional game nights; a settle-up plan with pay links; one-tap WhatsApp reminders. Stores groups in the browser until Supabase is connected. |
-| `supabase/migrations` | Database schema: groups, people, expenses and their shares, repeating and due bills, poker sessions, an append-only ledger, transfers, row-level security. |
-| `supabase/tests` | Database tests against a throwaway Postgres, including SQL vs TypeScript parity on random splits, due dates and poker nights. |
+| `supabase/migrations` | Database schema: groups, people, expenses and their shares, repeating and due bills, poker sessions, an append-only ledger, transfers, bill sheets with per-person links, the WhatsApp outbox, row-level security. `supabase/setup.sql` is all of it in one file for a new project. |
+| `supabase/functions` | Edge Functions: `send-bill-alerts` sends the WhatsApp template from Marmoot's number; `whatsapp-webhook` records delivered, read and failed. |
+| `supabase/local` | `npm run local`: the whole server on your computer (Postgres, PostgREST, the functions, a pretend WhatsApp inbox) plus the app, for trying bill sheets with no accounts. |
+| `supabase/tests` | Database tests against a throwaway Postgres, including SQL vs TypeScript parity on random splits, due dates and poker nights, and bill sheet permissions. |
+| `docs` | [Getting started](docs/GETTING-STARTED.md) on Windows, and [setting up sharing](docs/SHARING-SETUP.md) with Supabase, Cloudflare Pages and WhatsApp. |
 
 ## Run it
 
@@ -23,6 +28,7 @@ Requires Node 22.6 or newer.
 npm install
 npm run dev          # web app at http://localhost:5173
 npm run dev:phone    # the same, reachable from a phone on your Wi-Fi
+npm run local        # the app plus its server and a pretend WhatsApp, for bill sheets
 npm run preview      # production build served at http://localhost:4173
 npm test             # core, web and database tests
 npm run typecheck
@@ -33,10 +39,12 @@ The database tests start a throwaway Postgres 16+ from `PG_BIN`, `pg_config` on 
 
 ## Deploying for free
 
-- **Web app:** Cloudflare Pages, connected to this repo. Build command `npm run build`, output directory `apps/web/dist`.
-- **Database:** a Supabase project on the free plan. Apply the schema with the Supabase CLI: `supabase link --project-ref <ref>` then `supabase db push`.
-- **Repeating bills:** enable the `pg_cron` extension in Supabase, then schedule `select cron.schedule('marmoot-recurring', '17 * * * *', 'select public.catch_up_all_recurring()');`. The app also catches up a group whenever someone opens it.
-- Before inviting anyone, set up the nightly backup (the free Supabase plan has none). See "Running free until about 10 users" in the plan.
+[docs/SHARING-SETUP.md](docs/SHARING-SETUP.md) has every step:
+- **Supabase** (free plan) for the database and functions.
+- **Cloudflare Pages** for the web app (`npm run deploy:web`).
+- **WhatsApp:** Meta's free test number for up to 5 people.
+
+Before inviting more people, set up the nightly backup (the free Supabase plan has none), and require sign-in to create sheets.
 
 ## How the numbers are kept honest
 

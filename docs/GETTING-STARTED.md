@@ -2,7 +2,7 @@
 
 Everything here runs on your own computer for free. Commands are for PowerShell on Windows; they work the same in a macOS or Linux terminal.
 
-Right now Marmoot is a web app that keeps each person's groups in their own browser. Supabase (shared groups across phones) is not wired in yet, so you don't need a Supabase or Cloudflare account to run or test anything below.
+Marmoot keeps each person's groups in their own browser. Bill sheets, the shared item-by-item bills with WhatsApp messages, run on a server. `npm run local` runs that server on your computer, so nothing below needs an account. To share sheets with friends for real, follow [SHARING-SETUP.md](SHARING-SETUP.md).
 
 ## 1. Install once
 
@@ -46,6 +46,14 @@ Vite prints a **Network** address such as `http://192.168.1.23:5173`. Open it on
 
 Over plain `http` on your network the phone treats it as an ordinary web page: WhatsApp and payment-app buttons work, but "Add to Home Screen" won't install it as an app. That needs `https`, which the hosted version will have.
 
+### With the server, for bill sheets
+
+```powershell
+npm run local
+```
+
+This starts a throwaway database, the API, and a pretend WhatsApp inbox at http://localhost:54321/whatsapp. It also starts the app at http://localhost:5173, already connected. It needs PostgreSQL installed (step 1), and downloads PostgREST (about 4 MB) the first time. Ctrl+C stops everything and deletes the data.
+
 ### The production build
 
 ```powershell
@@ -66,9 +74,9 @@ What a good run looks like:
 
 | Suite | Tests | What it checks |
 | --- | --- | --- |
-| Core (`packages/core`) | 27 | Money math, splits, repeating-bill dates, poker nights, the fewest-transfer solver against brute force |
+| Core (`packages/core`) | 31 | Money math, splits, bill sheet shares, repeating-bill dates, poker nights, the fewest-transfer solver against brute force |
 | Web app (`apps/web`) | 13 | Group balances, repeating-bill catch-up, settle-up plans, WhatsApp message text |
-| Database (`supabase/tests`) | 17 | The SQL schema and functions against the core: 600 random splits, 300 random poker nights, due dates, voids, row-level security |
+| Database (`supabase/tests`) | 23 | The SQL schema and functions against the core: 600 random splits, 300 random poker nights, due dates, voids, bill sheet links and permissions, row-level security |
 
 The database tests look for Postgres in `C:\Program Files\PostgreSQL\<version>\bin` (or `PG_BIN`, or `pg_config` on your PATH). Without it they print "database tests skipped" and the rest still run. To point at a specific install:
 
@@ -106,6 +114,15 @@ Start with the sample flat (Home → **Look around a sample flat first**). Each 
 - [ ] Settings (gear on Home) → **Appearance**: switch System, Light and Dark. System follows your phone or Windows setting.
 - [ ] Reload the page: everything is still there. A different browser or phone starts empty, because data stays on each device until accounts arrive.
 
+**Bill sheets** (run `npm run local` first)
+- [ ] On a group, tap **Split by item**. Add items with prices (a new row appears as you type), tax, and your name. Tap **Create bill sheet**.
+- [ ] The sheet is a grid: items down the side, people across, ✓ or – in each cell with that person's share. Tap any cell to flip it. The totals and tax shares follow.
+- [ ] **Send … on WhatsApp**: each person's row goes Message sent → Delivered within a couple of seconds.
+- [ ] Open http://localhost:54321/whatsapp and tap **Open the bill** on one message, in a private window. That's their view: one switch per item and their own total. Untick one item and tap **Done**.
+- [ ] Back on the sheet, within about 4 seconds: their status reads Read, then Done, their cell shows –, and the activity list says what they changed.
+- [ ] **Download** (the arrow at the top) saves an Excel file with the same grid, SUM formulas, and a Changes tab.
+- [ ] **Close and add to …** locks the sheet and adds one expense to the group, with each person owing exactly their total. The guest page now says the amounts are final.
+
 **Game night (optional)**
 - [ ] **Game night** on a group: pick who's playing, tap buy-ins, then **Cash out** and enter each stack.
 - [ ] If the cash-outs don't match the buy-ins within 1% of the pot, it says so before showing results.
@@ -124,9 +141,6 @@ Start fresh any time: in the browser, open DevTools (F12) → Application → Lo
 | Phone can't reach the Network address | Same Wi-Fi as the computer? Allow Node.js through Windows Firewall on private networks |
 | Database tests skipped | Install PostgreSQL 16 or newer, or set `PG_BIN` as above |
 
-## Later: shared groups and hosting
+## Hosting it for friends
 
-These come with Phase 2 and aren't needed to run or test the app today:
-
-- **Supabase:** create a free project, install the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), then `supabase link --project-ref <ref>` and `supabase db push` to apply `supabase/migrations`. Then enable the `pg_cron` extension and schedule `select cron.schedule('marmoot-recurring', '17 * * * *', 'select public.catch_up_all_recurring()');`.
-- **Cloudflare Pages:** connect the GitHub repo. Build command `npm run build`, output directory `apps/web/dist`.
+[SHARING-SETUP.md](SHARING-SETUP.md) walks through Supabase, Cloudflare Pages and Marmoot's WhatsApp number, step by step.

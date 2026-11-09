@@ -338,3 +338,135 @@ a.list-row:hover, .as-button:hover { background: linear-gradient(90deg, transpar
   .sheet[open] { animation: rise 180ms ease-out; }
   @keyframes rise { from { transform: translateY(24px); opacity: 0; } }
 }
+
+/* ---------------------------------------------------------------- bill sheets */
+
+.wide-page { max-width: 46rem; }
+.send { display: grid; gap: 0.6rem; }
+
+/* New sheet: one row per item, name and price. */
+.item-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.item-rows li { display: grid; grid-template-columns: 1fr 6.5rem 44px; gap: 0.4rem; align-items: center; }
+.item-rows .icon-btn { margin: 0; color: var(--muted); }
+input.money { text-align: right; }
+
+/* The owner's grid: items down, people across. The item column stays put while
+   the people columns scroll sideways on a phone. */
+.grid-wrap { overflow-x: auto; margin: 0 -1rem; padding: 0 1rem; -webkit-overflow-scrolling: touch; }
+.grid-wrap:focus-visible { outline-offset: -2px; }
+.grid { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.92rem; }
+.grid th, .grid td { padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; background: var(--bg); }
+.grid thead th { vertical-align: bottom; font-weight: 600; }
+.grid .item-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  min-width: 6.5rem;
+  max-width: 10rem;
+  white-space: normal;
+  box-shadow: 1px 0 0 var(--line);
+}
+.grid .item-col .row-sub { display: block; color: var(--red-ink); font-weight: 500; }
+.grid .item-col .price { display: block; color: var(--muted); font-size: 0.8rem; font-weight: 500; }
+.grid tfoot .item-col .price { display: inline; margin-left: 0.25rem; }
+.add-item-row { display: flex; gap: 0.4rem; align-items: center; }
+.add-item-row input { width: 6rem; }
+.grid tbody th { font-weight: 500; }
+.person-col { min-width: 4.75rem; text-align: center !important; }
+.person-name { display: block; }
+.grid td:has(.cell) { text-align: center; padding: 0.25rem; }
+.cell {
+  font: inherit;
+  width: 100%;
+  min-width: 4.25rem;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  gap: 0;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+}
+.cell .num { font-size: 0.78rem; line-height: 1.1; }
+.cell.on { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green-ink); }
+.cell.on .num { color: var(--ink); }
+.cell:hover:not(:disabled) { outline: 1px solid var(--line); }
+.cell:disabled { cursor: default; }
+.unclaimed th, .unclaimed td { background: color-mix(in srgb, var(--red) 6%, var(--bg)); }
+.item-name { font: inherit; background: none; border: 0; padding: 0; color: inherit; text-align: left; cursor: pointer; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+.add-item input { min-height: 40px; padding: 0.4rem 0.6rem; }
+.add-item td { text-align: left !important; }
+.grid tfoot th, .grid tfoot td { color: var(--muted); }
+.grid tfoot .total th, .grid tfoot .total td { color: var(--ink); font-weight: 650; border-bottom: 0; }
+
+/* Where each person is: waiting, opened, done, not part of it. */
+.status {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+.status.done { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green-ink); }
+.status.out { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red-ink); }
+.status.seen { color: var(--ink); }
+.status.owner { background: transparent; }
+.row-title .status { margin: 0 0 0 0.35rem; vertical-align: 1px; }
+.row-main > .status { justify-self: start; }
+.row-actions { display: flex; gap: 0.4rem; flex: none; }
+.person-row-status { align-items: flex-start; }
+
+.activity { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; font-size: 0.92rem; }
+.activity li { display: flex; justify-content: space-between; gap: 1rem; }
+.activity time { flex: none; }
+
+/* The guest page: one switch per item. */
+.note { margin: 0; padding: 0.75rem 1rem; border-radius: 12px; background: var(--surface); display: grid; gap: 0.25rem; }
+.choose .choice { cursor: pointer; }
+.choose .choice:not(.on) .row-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 2.75rem;
+  height: 1.6rem;
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  flex: none;
+  cursor: pointer;
+  border: 0;
+  transition: background 120ms ease;
+}
+input.switch::after {
+  content: '';
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 120ms ease;
+}
+input.switch:checked { background: var(--green); }
+input.switch:checked::after { transform: translateX(1.15rem); }
+input.switch:focus-visible { outline: 2px solid var(--green-ink); outline-offset: 2px; }
+input.switch:disabled { opacity: 0.5; cursor: default; }
+
+.breakdown { margin: 0; display: grid; gap: 0.35rem; padding: 0.9rem 1rem; border-radius: 16px; background: var(--surface); }
+.breakdown div { display: flex; justify-content: space-between; gap: 1rem; }
+.breakdown dt { color: var(--muted); }
+.breakdown dd { margin: 0; }
+.breakdown .total { padding-top: 0.4rem; border-top: 1px solid var(--line); font-weight: 650; }
+.breakdown .total dt { color: var(--ink); }
+.notice svg { vertical-align: -3px; margin-right: 0.25rem; }

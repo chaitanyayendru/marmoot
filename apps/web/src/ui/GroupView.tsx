@@ -1,5 +1,5 @@
 import { useMemo, useState, type Dispatch } from 'react';
-import { ArrowLeftRight, ChevronLeft, MessageCircle, Repeat, Spade, Trash2, Users, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronLeft, ListChecks, Repeat, Spade, Trash2, Users, X } from 'lucide-react';
 import { go } from '../App.tsx';
 import { parseDollars, usd } from '../money.ts';
 import {
@@ -17,10 +17,11 @@ import {
   type Group,
   type Item,
 } from '../model.ts';
-import { expenseText, waLink } from '../whatsapp.ts';
+import { api } from '../apiClient.ts';
 import { BalanceChart } from './Chart.tsx';
 import { CategoryIcon, NotSaving, Sheet, Signed } from './bits.tsx';
 import { ExpenseSheet } from './ExpenseSheet.tsx';
+import { prefillSheet } from './NewSheet.tsx';
 
 const monthOf = (date: string) => {
   const [y, m] = date.split('-').map(Number) as [number, number];
@@ -99,7 +100,16 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
         </a>
       ))}
 
+      {(group.sheets ?? []).filter((sh) => !sh.expenseId).map((sh) => (
+        <a key={sh.id} className="due game-link" href={`#/g/${group.id}/sheet/${sh.id}`}>
+          <ListChecks size={18} /> {sh.title}: waiting on people to pick their items. Tap to see who's in.
+        </a>
+      ))}
+
       <div className="quick">
+        <a className="pill" href={`#/g/${group.id}/sheet/new`}>
+          <ListChecks size={16} /> Split by item
+        </a>
         <button className="pill" onClick={() => setStartingGame(true)}>
           <Spade size={16} /> Game night
         </button>
@@ -190,9 +200,22 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
       {added && (
         <div className="toast" role="status">
           <span>Added {added.description || categoryLabel(added.category)}, {usd(added.amount)}.</span>
-          <a className="pill small whatsapp" href={waLink(expenseText(group, added))} target="_blank" rel="noopener noreferrer">
-            <MessageCircle size={16} /> Tell the group
-          </a>
+          {api && added.paidBy === group.me && added.split.method === 'equal' ? (
+            <button
+              className="pill small"
+              onClick={() => {
+                // Turn it into a bill sheet so people can confirm or opt out, then send.
+                prefillSheet({ title: added.description, amount: added.amount, category: added.category, among: added.split.method === 'equal' ? added.split.among : [] });
+                dispatch({ type: 'deleteItem', group: group.id, item: added.id });
+                setAdded(null);
+                window.location.hash = `/g/${group.id}/sheet/new`;
+              }}
+            >
+              Let people opt out
+            </button>
+          ) : (
+            <button className="pill small" onClick={() => { dispatch({ type: 'deleteItem', group: group.id, item: added.id }); setAdded(null); }}>Undo</button>
+          )}
           <button className="icon-btn" aria-label="Dismiss" onClick={() => setAdded(null)}>
             <X size={18} />
           </button>

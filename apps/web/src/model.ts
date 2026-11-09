@@ -122,6 +122,25 @@ export interface DueBill {
   date: string;
 }
 
+/**
+ * A bill sheet this device started. The sheet itself lives on the server; the group
+ * keeps the owner's link and which group member each person on the sheet is.
+ */
+export interface SheetRef {
+  /** The server's sheet id. */
+  id: string;
+  /** The owner's secret link token. Never shared. */
+  ownerToken: string;
+  title: string;
+  category: Category;
+  date: string;
+  createdAt: number;
+  /** Sheet person id -> group member id. */
+  people: { personId: string; memberId: string }[];
+  /** Set once the sheet is closed into the group as this expense. */
+  expenseId?: string;
+}
+
 export interface Group {
   id: string;
   name: string;
@@ -132,6 +151,8 @@ export interface Group {
   items: Item[];
   recurring: Recurring[];
   due: DueBill[];
+  /** Bill sheets started from this group. Older saves lack it. */
+  sheets?: SheetRef[];
 }
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -196,7 +217,9 @@ export type Action =
   | { type: 'deleteRecurring'; group: string; recurring: string }
   | { type: 'catchUp'; today: string; ids: () => string; now: number }
   | { type: 'resolveDue'; group: string; recurringId: string; date: string; amount: number | null; id: string; at: number }
-  | { type: 'updateGame'; group: string; game: string; update: GameUpdate };
+  | { type: 'updateGame'; group: string; game: string; update: GameUpdate }
+  | { type: 'addSheet'; group: string; sheet: SheetRef }
+  | { type: 'closeSheet'; group: string; sheet: string; expense: ExpenseItem };
 
 export type GameUpdate =
   | { kind: 'buyIn'; player: string; amount: number; ids: [string, string]; at: number }
@@ -219,7 +242,8 @@ export function memberInUse(g: Group, member: string): boolean {
           ? i.from === member || i.to === member
           : i.players.includes(member),
     ) ||
-    g.recurring.some((r) => r.paidBy === member || splitPeople(r.split).includes(member))
+    g.recurring.some((r) => r.paidBy === member || splitPeople(r.split).includes(member)) ||
+    (g.sheets ?? []).some((sh) => !sh.expenseId && sh.people.some((p) => p.memberId === member))
   );
 }
 
@@ -285,6 +309,14 @@ export function reducer(s: State, a: Action): State {
       return mapGroup(s, a.group, (g) => ({ ...g, items: [...g.items, a.item] }));
     case 'deleteItem':
       return mapGroup(s, a.group, (g) => ({ ...g, items: g.items.filter((i) => i.id !== a.item) }));
+    case 'addSheet':
+      return mapGroup(s, a.group, (g) => ({ ...g, sheets: [a.sheet, ...(g.sheets ?? [])] }));
+    case 'closeSheet':
+      return mapGroup(s, a.group, (g) => ({
+        ...g,
+        items: g.items.some((i) => i.id === a.expense.id) ? g.items : [...g.items, a.expense],
+        sheets: (g.sheets ?? []).map((sh) => (sh.id === a.sheet ? { ...sh, expenseId: a.expense.id } : sh)),
+      }));
     case 'addRecurring':
       return mapGroup(s, a.group, (g) => ({ ...g, recurring: [...g.recurring, a.recurring] }));
     case 'deleteRecurring':

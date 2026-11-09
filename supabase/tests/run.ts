@@ -19,12 +19,10 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { readFileSync } from 'node:fs';
+import { applySchema, startCluster, stopCluster, supabaseDir } from './pg.ts';
+import { setupSql } from '../setup-sql.ts';
 import { randomUUID } from 'node:crypto';
 import {
   DiscrepancyTooLarge,
@@ -39,81 +37,7 @@ import {
   type Split,
 } from '../../packages/core/src/index.ts';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-
 // ------------------------------------------------------------------ database lifecycle
-
-const isWindows = process.platform === 'win32';
-const exe = (name: string) => (isWindows ? `${name}.exe` : name);
-const hasInitdb = (dir: string) => existsSync(join(dir, exe('initdb')));
-
-/** Postgres server binaries: PG_BIN, then pg_config on PATH, then the usual install folders. */
-function findPgBin(): string | null {
-  if (process.env.PG_BIN && hasInitdb(process.env.PG_BIN)) return process.env.PG_BIN;
-  try {
-    const dir = execFileSync('pg_config', ['--bindir'], { encoding: 'utf8' }).trim();
-    if (hasInitdb(dir)) return dir;
-  } catch { /* not on PATH */ }
-  const bases = isWindows
-    ? [join(process.env.ProgramFiles ?? 'C:\\Program Files', 'PostgreSQL')]
-    : ['/usr/lib/postgresql', '/opt/homebrew/opt', '/usr/local/opt'];
-  for (const base of bases) {
-    if (!existsSync(base)) continue;
-    const versions = readdirSync(base).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    for (const v of versions) if (hasInitdb(join(base, v, 'bin'))) return join(base, v, 'bin');
-  }
-  return null;
-}
-
-let server: ChildProcess | undefined;
-let dataDir: string | undefined;
-
-async function startCluster(): Promise<string | null> {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  const bin = findPgBin();
-  if (!bin) return null;
-  dataDir = mkdtempSync(join(tmpdir(), 'marmoot-pg-'));
-  chmodSync(dataDir, 0o777);
-  // initdb refuses to run as root; use the postgres system user when we are root.
-  const asPg = (cmd: string, args: string[]) => (process.getuid?.() === 0 ? ['runuser', ['-u', 'postgres', '--', cmd, ...args]] as const : [cmd, args] as const);
-  const [c1, a1] = asPg(join(bin, exe('initdb')), ['-D', join(dataDir, 'data'), '-U', 'postgres', '--auth=trust', '-E', 'UTF8', '--no-locale']);
-  execFileSync(c1, a1, { stdio: 'ignore' });
-  const port = String(55000 + Math.floor(Math.random() * 5000));
-  // A Unix socket in the temp folder on Linux and macOS; a localhost-only TCP port on Windows.
-  const tcp = isWindows || !!process.env.PG_TCP;
-  const listen = tcp ? ['-c', 'listen_addresses=localhost'] : ['-k', dataDir, '-c', 'listen_addresses='];
-  const [c2, a2] = asPg(join(bin, exe('postgres')), ['-D', join(dataDir, 'data'), '-p', port, ...listen, '-c', 'fsync=off']);
-  server = spawn(c2, a2, { stdio: 'ignore' });
-  const url = tcp
-    ? `postgresql://postgres@localhost:${port}/postgres`
-    : `postgresql://postgres@/postgres?host=${encodeURIComponent(dataDir)}&port=${port}`;
-  for (let i = 0; i < 150; i++) {
-    try {
-      const c = new pg.Client({ connectionString: url });
-      await c.connect();
-      await c.end();
-      return url;
-    } catch {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  throw new Error('temporary Postgres did not start');
-}
-
-async function stopCluster() {
-  if (server && server.exitCode === null) {
-    const exited = new Promise((r) => server!.once('exit', r));
-    server.kill('SIGINT');
-    await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
-  }
-  if (dataDir) {
-    try {
-      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    } catch {
-      console.warn(`could not remove the temporary database at ${dataDir}`);
-    }
-  }
-}
 
 // ------------------------------------------------------------------ helpers
 
@@ -208,10 +132,7 @@ before(async () => {
   }
   db = new pg.Client({ connectionString: url });
   await db.connect();
-  await db.query(readFileSync(join(root, 'tests/auth-stub.sql'), 'utf8'));
-  for (const f of readdirSync(join(root, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
-    await db.query(readFileSync(join(root, 'migrations', f), 'utf8'));
-  }
+  await applySchema(db);
   await db.query('insert into auth.users (id) values ($1), ($2)', [userA, userB]);
 });
 
@@ -607,4 +528,152 @@ describe('expenses', () => {
     await as(userA, (q) => q("update people set phone = '+14045550101' where id = $1", [both[1]]));
     await assert.rejects(as(userA, (q) => q("update people set phone = '404-555-0101' where id = $1", [both[1]])), /people_phone_check/);
   });
+});
+
+// ------------------------------------------------------------------ bill sheets
+
+/** Run fn as a Supabase API role (anon by default), inside one transaction. */
+async function asRole<T>(role: 'anon' | 'service_role', fn: (q: (sql: string, params?: unknown[]) => Promise<pg.QueryResult>) => Promise<T>): Promise<T> {
+  await db.query('begin');
+  try {
+    await db.query(`set local role ${role}`);
+    const out = await fn((sql, params) => db.query(sql, params));
+    await db.query('commit');
+    return out;
+  } catch (e) {
+    await db.query('rollback');
+    throw e;
+  }
+}
+
+interface SheetView {
+  sheet: { id: string; title: string; status: string; tax_cents: number; default_in: boolean };
+  me: { id: string; is_owner: boolean };
+  people: { id: string; name: string; is_owner: boolean; phone: string | null; token: string | null; alert_status: string | null; out_of_bill: boolean; viewed_at: string | null; responded_at: string | null }[];
+  items: { id: string; name: string; price_cents: number }[];
+  choices: { item_id: string; person_id: string; is_in: boolean }[];
+  events: { kind: string; person_id: string | null; actor_id: string | null; item_id: string | null }[];
+}
+
+const anon = <T,>(sql: string, params: unknown[] = []) => asRole('anon', async (q) => (await q(sql, params)).rows as T[]);
+const view = async (token: string) => (await anon<{ v: SheetView }>('select bill_sheet($1) as v', [token]))[0]!.v;
+
+async function costcoSheet() {
+  const created = (await anon<{ r: { sheet_id: string; owner_token: string; people: { id: string; name: string; token: string }[] } }>(
+    'select create_bill_sheet($1, $2, $3, $4) as r',
+    [
+      'Costco',
+      JSON.stringify([{ name: 'Chai', phone: '+14045550100', owner: true }, { name: 'Chandu', phone: '+919845012345' }, { name: 'Hima' }]),
+      JSON.stringify([{ name: 'Tomatoes', price: 600 }, { name: 'Onions', price: 300 }, { name: 'Rice', price: 1000 }]),
+      190,
+    ],
+  ))[0]!.r;
+  const token = (name: string) => created.people.find((p) => p.name === name)!.token;
+  return { ...created, chai: created.owner_token, chandu: token('Chandu'), hima: token('Hima') };
+}
+
+describe('bill sheets', () => {
+  test('anyone can start a sheet; guests see every cell but no phones, links or activity', async (t) => {
+    if (!url) return t.skip();
+    const s = await costcoSheet();
+    assert.equal(s.people.length, 3);
+    assert.match(s.hima, /^[A-Za-z0-9_-]{22}$/);
+    const guest = await view(s.hima);
+    assert.equal(guest.me.is_owner, false);
+    assert.equal(guest.items.length, 3);
+    assert.ok(guest.people.every((p) => p.phone === null && p.token === null && p.alert_status === null));
+    assert.deepEqual(guest.events, []);
+    const owner = await view(s.chai);
+    assert.equal(owner.people.find((p) => p.name === 'Chandu')!.phone, '+919845012345');
+    assert.equal(owner.people.find((p) => p.name === 'Hima')!.token, s.hima);
+    assert.deepEqual(owner.events.map((e) => e.kind), ['created']);
+    await assert.rejects(view('not-a-real-token-00000'), /link is not valid/);
+  });
+
+  test('Hima keeps tomatoes and drops onions; people change only their own column; the owner can change any', async (t) => {
+    if (!url) return t.skip();
+    const s = await costcoSheet();
+    const v0 = await view(s.hima);
+    const item = (n: string) => v0.items.find((i) => i.name === n)!.id;
+    const person = (n: string) => v0.people.find((p) => p.name === n)!.id;
+
+    await anon('select mark_bill_viewed($1)', [s.hima]);
+    await anon('select mark_bill_viewed($1)', [s.hima]);
+    await anon('select set_bill_choice($1, $2, false)', [s.hima, item('Onions')]);
+    await anon('select set_bill_choice($1, $2, false)', [s.hima, item('Onions')]); // no-op, no second event
+    await anon('select mark_bill_done($1)', [s.hima]);
+    await assert.rejects(anon('select set_bill_choice($1, $2, false, $3)', [s.hima, item('Rice'), person('Chandu')]), /only change your own/);
+    await anon('select set_bill_choice($1, $2, false, $3)', [s.chai, item('Rice'), person('Chandu')]);
+
+    const owner = await view(s.chai);
+    assert.deepEqual(
+      owner.choices.map((c) => [owner.items.find((i) => i.id === c.item_id)!.name, owner.people.find((p) => p.id === c.person_id)!.name, c.is_in]).sort(),
+      [['Onions', 'Hima', false], ['Rice', 'Chandu', false]],
+    );
+    const hima = owner.people.find((p) => p.name === 'Hima')!;
+    assert.ok(hima.viewed_at && hima.responded_at);
+    assert.deepEqual(owner.events.map((e) => e.kind).reverse(), ['created', 'viewed', 'out', 'done', 'out']);
+    const rice = owner.events.find((e) => e.item_id === item('Rice'))!;
+    assert.deepEqual([rice.person_id, rice.actor_id], [person('Chandu'), person('Chai')]);
+  });
+
+  test('out of the whole bill, back in by ticking an item; a closed sheet refuses changes', async (t) => {
+    if (!url) return t.skip();
+    const s = await costcoSheet();
+    const v0 = await view(s.chandu);
+    await anon('select set_out_of_bill($1, true)', [s.chandu]);
+    assert.equal((await view(s.chai)).people.find((p) => p.name === 'Chandu')!.out_of_bill, true);
+    await anon('select set_bill_choice($1, $2, true)', [s.chandu, v0.items[0]!.id]);
+    assert.equal((await view(s.chai)).people.find((p) => p.name === 'Chandu')!.out_of_bill, false);
+
+    await assert.rejects(anon('select close_bill_sheet($1)', [s.chandu]), /Only the person who shared/);
+    await anon('select close_bill_sheet($1)', [s.chai]);
+    assert.equal((await view(s.hima)).sheet.status, 'closed');
+    await assert.rejects(anon('select set_bill_choice($1, $2, false)', [s.hima, v0.items[0]!.id]), /closed/);
+    await assert.rejects(anon('select add_bill_item($1, $2, $3)', [s.chai, 'Milk', 450]), /closed/);
+    await anon('select close_bill_sheet($1, false)', [s.chai]);
+    await anon('select add_bill_item($1, $2, $3)', [s.chai, 'Milk', 450]);
+    const after = await view(s.hima);
+    assert.deepEqual(after.items.map((i) => i.name), ['Tomatoes', 'Onions', 'Rice', 'Milk']);
+    await anon('select remove_bill_item($1, $2)', [s.chai, after.items[1]!.id]);
+    assert.deepEqual((await view(s.hima)).items.map((i) => i.name), ['Tomatoes', 'Rice', 'Milk']);
+    await assert.rejects(anon('select add_bill_item($1, $2, $3)', [s.hima, 'Chips', 300]), /Only the person who shared/);
+  });
+
+  test('WhatsApp alerts: only the server queues them; statuses only move forward', async (t) => {
+    if (!url) return t.skip();
+    const s = await costcoSheet();
+    await assert.rejects(anon('select * from queue_bill_alerts($1)', [s.chai]), /permission denied/);
+    await assert.rejects(anon("select record_whatsapp_status('x', 'read')"), /permission denied/);
+
+    const queued = await asRole('service_role', async (q) => (await q('select * from queue_bill_alerts($1)', [s.chai])).rows);
+    assert.deepEqual(queued.map((r) => [r.person_name, r.to_phone, r.owner_name, r.sheet_title, Number(r.sheet_total_cents)]), [['Chandu', '+919845012345', 'Chai', 'Costco', 2090]]);
+    const again = await asRole('service_role', async (q) => (await q('select * from queue_bill_alerts($1)', [s.chai])).rows);
+    assert.equal(again.length, 0, 'not messaged twice');
+
+    const svc = (sql: string, params: unknown[]) => asRole('service_role', (q) => q(sql, params));
+    await svc("select record_alert($1, 'sent', 'wamid.1')", [queued[0]!.outbox_id]);
+    await svc("select record_whatsapp_status('wamid.1', 'read')", []);
+    await svc("select record_whatsapp_status('wamid.1', 'delivered')", []);
+    const people = (await view(s.chai)).people;
+    assert.equal(people.find((p) => p.name === 'Chandu')!.alert_status, 'read');
+    assert.equal(people.find((p) => p.name === 'Hima')!.alert_status, 'no_phone');
+    assert.deepEqual((await view(s.chai)).events.map((e) => e.kind).reverse(), ['created', 'alert_queued', 'alert_sent', 'alert_read']);
+
+    await asRole('anon', (q) => q('select set_bill_person_phone($1, $2, $3)', [s.chai, people.find((p) => p.name === 'Hima')!.id, '+14045550199']));
+    const second = await asRole('service_role', async (q) => (await q('select * from queue_bill_alerts($1)', [s.chai])).rows);
+    assert.deepEqual(second.map((r) => r.person_name), ['Hima']);
+  });
+
+  test('sheet tables are closed to the API; only the functions reach them', async (t) => {
+    if (!url) return t.skip();
+    await costcoSheet();
+    for (const table of ['bill_sheets', 'bill_people', 'bill_items', 'bill_choices', 'bill_events', 'whatsapp_outbox']) {
+      await assert.rejects(anon(`select * from ${table}`), /permission denied/, table);
+    }
+  });
+});
+
+test('supabase/setup.sql matches the migrations (run npm run setup-sql after changing one)', () => {
+  assert.equal(readFileSync(`${supabaseDir}setup.sql`, 'utf8'), setupSql());
 });
