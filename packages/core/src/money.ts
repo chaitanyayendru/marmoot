@@ -44,7 +44,7 @@ export function allocate(total: Cents, weights: ReadonlyMap<string, number>): Ma
     const num = abs * BigInt(w);
     const share = num / W;
     given += share;
-    out.set(k, sign * Number(share));
+    out.set(k, share === 0n ? 0 : sign * Number(share)); // never -0
     rema.push({ key: k, rem: num % W });
   }
 

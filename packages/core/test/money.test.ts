@@ -22,6 +22,13 @@ test('allocation is deterministic regardless of map insertion order', () => {
   assert.equal(a.get('a'), 34);
 });
 
+test('never returns negative zero', () => {
+  // -1 cent across two people: one pays it, the other gets 0, not -0.
+  const r = allocate(-1, new Map([['a', 1], ['b', 1]]));
+  assert.ok(Object.is(r.get('b'), 0));
+  assert.equal(r.get('a'), -1);
+});
+
 test('rejects fractional cents', () => {
   assert.throws(() => allocate(10.5, new Map([['a', 1]])));
 });
