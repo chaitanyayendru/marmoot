@@ -39,7 +39,10 @@ a { color: var(--brass); }
 .page {
   max-width: 34rem;
   margin: 0 auto;
-  padding: 1.5rem 1rem 5rem;
+  /* Clear the notch and home bar when installed on a phone (viewport-fit=cover). */
+  padding:
+    calc(1.5rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    calc(5rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
   display: grid;
   gap: 1.25rem;
 }
