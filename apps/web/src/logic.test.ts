@@ -83,6 +83,8 @@ describe('recurring bills', () => {
     expect(advance('2026-01-31', 'month')).toBe('2026-02-28');
     expect(advance('2026-12-15', 'month')).toBe('2027-01-15');
     expect(advance('2026-02-25', 'week')).toBe('2026-03-04');
+    // A bill on the 31st goes back to the 31st after February.
+    expect(advance('2027-02-28', 'month', 31)).toBe('2027-03-31');
   });
 
   it('posts fixed bills that fell due and asks for the amount of variable ones', () => {

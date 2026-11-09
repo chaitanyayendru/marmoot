@@ -2,6 +2,10 @@
  * Database tests: applies the migrations to a throwaway Postgres and checks that
  *   - poker_nets() in SQL agrees with settlePokerNight() in @marmoot/core, cent for cent,
  *     on the worked example and on hundreds of random nights
+ *   - split_amount() agrees with splitAmount() and next_due_date() with nextDue(),
+ *     including which splits are refused and why
+ *   - expenses post zero-sum balances, retries do not double-post, voids and edits
+ *     reverse cleanly, and repeating bills post once per due date
  *   - the ledger and the event log are append-only
  *   - closing a night posts balances that sum to zero, and paying the solver's
  *     transfers brings every balance to zero
@@ -20,7 +24,19 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
-import { DiscrepancyTooLarge, applyTransfers, minTransferSettle, settlePokerNight, type PokerEvent } from '../../packages/core/src/index.ts';
+import { randomUUID } from 'node:crypto';
+import {
+  DiscrepancyTooLarge,
+  applyTransfers,
+  expenseNets,
+  minTransferSettle,
+  nextDue,
+  settlePokerNight,
+  splitAmount,
+  sumNets,
+  type PokerEvent,
+  type Split,
+} from '../../packages/core/src/index.ts';
 
 const root = new URL('../', import.meta.url).pathname;
 
@@ -323,5 +339,244 @@ describe('database', () => {
       as(userA, (q) => q("insert into ledger_entries (group_id, person_id, amount_cents, currency, source, source_id) values ($1, $2, 100, 'USD', 'poker', $1)", [n.group, n.people.get('a')])),
       /permission denied/,
     );
+  });
+});
+
+// ------------------------------------------------------------------ everyday expenses
+
+interface Flat {
+  group: string;
+  people: Map<string, string>; // name -> uuid
+}
+
+async function makeFlat(names: string[], tz = 'UTC'): Promise<Flat> {
+  return as(userA, async (q) => {
+    const group = (await q('insert into groups (name, time_zone) values ($1, $2) returning id', ['Flat 4B', tz])).rows[0].id as string;
+    const people = new Map<string, string>();
+    for (const n of names) people.set(n, (await q('insert into people (group_id, display_name) values ($1, $2) returning id', [group, n])).rows[0].id);
+    return { group, people };
+  });
+}
+
+async function addExpense(f: Flat, paidBy: string, amount: number, split: Split, extra: { id?: string; on?: string } = {}) {
+  return as(userA, async (q) =>
+    (await q('select * from add_expense(p_group => $1, p_description => $2, p_amount_cents => $3, p_paid_by => $4, p_split => $5, p_spent_on => $6, p_category => $7, p_id => $8)', [
+      f.group, 'Groceries', amount, f.people.get(paidBy), JSON.stringify(split), extra.on ?? null, 'groceries', extra.id ?? null,
+    ])).rows[0] as { id: string; voided_at: string | null; replaces_id: string | null },
+  );
+}
+
+async function groupBalances(f: Flat): Promise<Map<string, number>> {
+  const rows = await as(userA, async (q) => (await q('select person_id, balance_cents from balances where group_id = $1', [f.group])).rows);
+  return new Map(rows.map((r) => [r.person_id as string, Number(r.balance_cents)]).filter(([, v]) => v !== 0) as [string, number][]);
+}
+
+const nonZero = (m: Map<string, number>) => new Map([...m].filter(([, v]) => v !== 0));
+
+/** Run core's splitAmount, returning the shares or the message a person would see. */
+function coreSplit(total: number, split: Split): Map<string, number> | string {
+  try {
+    return splitAmount(total, split);
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+async function sqlSplit(total: number, split: unknown): Promise<Map<string, number> | string> {
+  try {
+    const rows = (await db.query('select person_id, share_cents from split_amount($1, $2)', [total, JSON.stringify(split)])).rows;
+    return new Map(rows.map((r) => [r.person_id as string, Number(r.share_cents)]));
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+describe('expenses', () => {
+  test('split_amount matches core on 600 random splits, refusals included', async (t) => {
+    if (!url) return t.skip();
+    const rng = mulberry32(1109);
+    const pick = <T,>(xs: readonly T[]) => xs[Math.floor(rng() * xs.length)]!;
+    const counts = { ok: 0, refused: 0 };
+    for (let k = 0; k < 600; k++) {
+      const ids = Array.from({ length: 1 + Math.floor(rng() * 7) }, () => randomUUID());
+      const total = rng() < 0.03 ? 0 : 1 + Math.floor(rng() * (rng() < 0.5 ? 200 : 500000));
+      const method = pick(['equal', 'exact', 'percent', 'shares'] as const);
+      let split: Split;
+      if (method === 'equal') {
+        const among = ids.filter(() => rng() < 0.7);
+        if (rng() < 0.2 && among.length) among.push(among[0]!); // a duplicate counts once
+        split = { method, among };
+      } else if (method === 'exact') {
+        const amounts: Record<string, number> = {};
+        let left = total;
+        ids.forEach((id, i) => {
+          const a = i === ids.length - 1 ? left : Math.floor(rng() * (left + 1));
+          amounts[id] = a;
+          left -= a;
+        });
+        if (rng() < 0.25) amounts[ids[0]!] = (amounts[ids[0]!] ?? 0) + pick([-7, 1, 250, 99999]);
+        split = { method, amounts };
+      } else if (method === 'percent') {
+        const basisPoints: Record<string, number> = {};
+        let left = 10000;
+        ids.forEach((id, i) => {
+          const b = i === ids.length - 1 ? left : Math.floor(rng() * (left + 1));
+          basisPoints[id] = b;
+          left -= b;
+        });
+        if (rng() < 0.25) basisPoints[ids[0]!] = (basisPoints[ids[0]!] ?? 0) + pick([-50, 50, 1, 2.5, 3000]);
+        split = { method, basisPoints };
+      } else {
+        const shares: Record<string, number> = {};
+        for (const id of ids) shares[id] = pick([0, 1, 1, 1, 2, 3, 7]);
+        if (rng() < 0.1) shares[ids[0]!] = pick([1.5, -1]);
+        split = { method, shares };
+      }
+      const want = coreSplit(total, split);
+      const got = await sqlSplit(total, split);
+      if (typeof want === 'string') {
+        counts.refused++;
+        assert.equal(got, want, `case ${k}: ${JSON.stringify({ total, split })}`);
+      } else {
+        counts.ok++;
+        assert.ok(typeof got !== 'string', `case ${k}: SQL refused (${got}) what core accepted: ${JSON.stringify({ total, split })}`);
+        assert.deepEqual(nonZero(got), nonZero(want), `case ${k}: ${JSON.stringify({ total, split })}`);
+      }
+    }
+    assert.ok(counts.ok > 350 && counts.refused > 60, `exercised both paths: ${JSON.stringify(counts)}`);
+  });
+
+  test('next_due_date matches core, and a bill on the 31st comes back to the 31st', async (t) => {
+    if (!url) return t.skip();
+    const rng = mulberry32(31);
+    for (let k = 0; k < 400; k++) {
+      const day = 1 + Math.floor(rng() * 31);
+      const d = new Date(Date.UTC(2024 + Math.floor(rng() * 6), Math.floor(rng() * 12), 1 + Math.floor(rng() * 28)));
+      const from = d.toISOString().slice(0, 10);
+      const every = rng() < 0.3 ? 'week' : 'month';
+      const got = (await db.query("select to_char(next_due_date($1::date, $2, $3::smallint), 'YYYY-MM-DD') as d", [from, every, day])).rows[0].d;
+      assert.equal(got, nextDue(from, every, day), `${from} ${every} anchor ${day}`);
+    }
+    const chain = (await db.query(`
+      with recursive c(d, n) as (select date '2027-01-31', 0 union all select next_due_date(d, 'month', 31::smallint), n + 1 from c where n < 4)
+      select string_agg(to_char(d, 'MM-DD'), ' ' order by n) as s from c`)).rows[0].s;
+    assert.equal(chain, '01-31 02-28 03-31 04-30 05-31');
+  });
+
+  test('expenses post zero-sum balances that match core; a retried add is not counted twice', async (t) => {
+    if (!url) return t.skip();
+    const f = await makeFlat(['you', 'ravi', 'meera', 'sana']);
+    const id = (n: string) => f.people.get(n)!;
+    const all = ['you', 'ravi', 'meera', 'sana'].map(id);
+    const entered: [string, number, Split][] = [
+      ['you', 320000, { method: 'percent', basisPoints: { [id('you')]: 3000, [id('ravi')]: 2500, [id('meera')]: 2500, [id('sana')]: 2000 } }],
+      ['meera', 18642, { method: 'equal', among: all }],
+      ['ravi', 14388, { method: 'equal', among: all }],
+      ['you', 6417, { method: 'shares', shares: { [id('you')]: 1, [id('ravi')]: 1, [id('meera')]: 2 } }],
+      ['sana', 8450, { method: 'exact', amounts: { [id('you')]: 2250, [id('meera')]: 3100, [id('sana')]: 3100 } }],
+    ];
+    const clientId = randomUUID();
+    for (const [i, [who, amount, split]] of entered.entries()) await addExpense(f, who, amount, split, i === 1 ? { id: clientId } : {});
+    const again = await addExpense(f, 'meera', 18642, entered[1]![2], { id: clientId });
+    assert.equal(again.id, clientId);
+
+    const want = nonZero(sumNets(entered.map(([who, amount, split]) => expenseNets(id(who), amount, split))));
+    const got = await groupBalances(f);
+    assert.deepEqual(got, want);
+    assert.equal([...got.values()].reduce((s, v) => s + v, 0), 0);
+    const count = await as(userA, async (q) => (await q('select count(*)::int as n from expenses where group_id = $1', [f.group])).rows[0].n);
+    assert.equal(count, 5);
+  });
+
+  test('a split with someone outside the group, or a bad split, records nothing', async (t) => {
+    if (!url) return t.skip();
+    const f = await makeFlat(['you', 'ravi']);
+    const other = await makeFlat(['stranger']);
+    await assert.rejects(addExpense(f, 'you', 1000, { method: 'equal', among: [f.people.get('you')!, other.people.get('stranger')!] }), /must be in this group/);
+    await assert.rejects(addExpense(f, 'you', 1000, { method: 'exact', amounts: { [f.people.get('you')!]: 580 } }), /\$4\.20 still to assign\./);
+    await assert.rejects(
+      as(userA, (q) => q('select add_expense($1, $2, $3, $4, $5)', [f.group, 'Lunch', 1000, other.people.get('stranger'), JSON.stringify({ method: 'equal', among: [f.people.get('you')] })])),
+      /who paid is not in this group/,
+    );
+    assert.equal((await groupBalances(f)).size, 0);
+  });
+
+  test('voiding reverses an expense; editing is a void plus a corrected expense; rows never change otherwise', async (t) => {
+    if (!url) return t.skip();
+    const f = await makeFlat(['you', 'ravi']);
+    const both = [f.people.get('you')!, f.people.get('ravi')!];
+    const e = await addExpense(f, 'you', 5000, { method: 'equal', among: both });
+    assert.deepEqual(await groupBalances(f), new Map([[both[0]!, 2500], [both[1]!, -2500]]));
+
+    const edited = await as(userA, async (q) =>
+      (await q('select * from edit_expense($1, $2, $3, $4, $5, $6, $7)', [e.id, 'Groceries', 6000, both[0], JSON.stringify({ method: 'equal', among: both }), '2026-11-08', 'groceries'])).rows[0],
+    );
+    assert.equal(edited.replaces_id, e.id);
+    assert.deepEqual(await groupBalances(f), new Map([[both[0]!, 3000], [both[1]!, -3000]]));
+    await assert.rejects(as(userA, (q) => q('select void_expense($1)', [e.id])), /already void/);
+
+    await as(userA, (q) => q('select void_expense($1)', [edited.id]));
+    assert.equal((await groupBalances(f)).size, 0);
+
+    await assert.rejects(db.query('update expenses set amount_cents = 1 where id = $1', [e.id]), /cannot be edited/);
+    await assert.rejects(db.query('delete from expenses where id = $1', [e.id]), /append-only/);
+    await assert.rejects(db.query('update expense_shares set share_cents = 1 where expense_id = $1', [e.id]), /append-only/);
+  });
+
+  test('repeating bills: fixed ones post once per due date, variable ones wait for an amount', async (t) => {
+    if (!url) return t.skip();
+    const f = await makeFlat(['you', 'ravi']);
+    const both = [f.people.get('you')!, f.people.get('ravi')!];
+    const equal = JSON.stringify({ method: 'equal', among: both });
+    const [rent, power] = await as(userA, async (q) => [
+      (await q("insert into recurring_bills (group_id, description, category, amount_cents, paid_by, split, every, next_due) values ($1, 'Rent', 'rent', 200000, $2, $3, 'month', '2027-01-31') returning id, anchor_day", [f.group, both[0], equal])).rows[0],
+      (await q("insert into recurring_bills (group_id, description, category, amount_cents, paid_by, split, every, next_due) values ($1, 'Electricity', 'utilities', null, $2, $3, 'month', '2027-02-10') returning id", [f.group, both[1], equal])).rows[0],
+    ]);
+    assert.equal(rent.anchor_day, 31);
+
+    const first = (await db.query("select recurring_id, to_char(due_on, 'YYYY-MM-DD') as due_on, expense_id from run_recurring($1, '2027-04-05')", [f.group])).rows;
+    const rentDates = first.filter((r) => r.recurring_id === rent.id).map((r) => r.due_on);
+    assert.deepEqual(rentDates, ['2027-01-31', '2027-02-28', '2027-03-31']);
+    assert.deepEqual(first.filter((r) => r.recurring_id === power.id).map((r) => [r.due_on, r.expense_id]), [['2027-02-10', null], ['2027-03-10', null]]);
+    assert.equal((await db.query("select * from run_recurring($1, '2027-04-05')", [f.group])).rowCount, 0, 'a second run posts nothing');
+    const next = (await db.query("select to_char(next_due, 'YYYY-MM-DD') as d from recurring_bills where id = $1", [rent.id])).rows[0].d;
+    assert.equal(next, '2027-04-30');
+    assert.deepEqual(await groupBalances(f), new Map([[both[0]!, 300000], [both[1]!, -300000]]));
+
+    await as(userA, (q) => q("select resolve_due_bill($1, '2027-02-10', 9000)", [power.id]));
+    await as(userA, (q) => q("select resolve_due_bill($1, '2027-03-10')", [power.id]));
+    await assert.rejects(as(userA, (q) => q("select resolve_due_bill($1, '2027-03-10', 100)", [power.id])), /already skipped/);
+    assert.deepEqual(await groupBalances(f), new Map([[both[0]!, 300000 - 4500], [both[1]!, -300000 + 4500]]));
+
+    await assert.rejects(
+      as(userA, (q) => q("insert into recurring_bills (group_id, description, amount_cents, paid_by, split, every, next_due) values ($1, 'Water', null, $2, $3, 'month', '2027-01-01')", [f.group, both[0], JSON.stringify({ method: 'exact', amounts: { [both[0]!]: 100 } })])),
+      /cannot be split by exact amounts/,
+    );
+
+    // A member can catch up their own group; the scheduled-job entry point is not theirs to call.
+    await as(userA, (q) => q('select * from catch_up_recurring($1)', [f.group]));
+    await assert.rejects(as(userA, (q) => q("select * from run_recurring($1, '2030-01-01')", [f.group])), /permission denied/);
+    await assert.rejects(as(userA, (q) => q('select catch_up_all_recurring()')), /permission denied/);
+  });
+
+  test('row-level security for expenses, and phone numbers in international format', async (t) => {
+    if (!url) return t.skip();
+    const f = await makeFlat(['you', 'ravi']);
+    const both = [f.people.get('you')!, f.people.get('ravi')!];
+    const e = await addExpense(f, 'you', 1000, { method: 'equal', among: both });
+    const seen = await as(userB, async (q) => ({
+      expenses: (await q('select 1 from expenses where id = $1', [e.id])).rowCount,
+      shares: (await q('select 1 from expense_shares where expense_id = $1', [e.id])).rowCount,
+    }));
+    assert.deepEqual(seen, { expenses: 0, shares: 0 });
+    await assert.rejects(as(userB, (q) => q('select add_expense($1, $2, $3, $4, $5)', [f.group, 'Lunch', 1000, both[0], JSON.stringify({ method: 'equal', among: both })])), /not found/);
+    await assert.rejects(as(userB, (q) => q('select void_expense($1)', [e.id])), /not found/);
+    await assert.rejects(
+      as(userA, (q) => q("insert into expenses (group_id, description, spent_on, amount_cents, currency, paid_by, split, created_by) values ($1, 'x', '2026-11-08', 1, 'USD', $2, '{}', $3)", [f.group, both[0], userA])),
+      /permission denied/,
+    );
+
+    await as(userA, (q) => q("update people set phone = '+14045550101' where id = $1", [both[1]]));
+    await assert.rejects(as(userA, (q) => q("update people set phone = '404-555-0101' where id = $1", [both[1]])), /people_phone_check/);
   });
 });

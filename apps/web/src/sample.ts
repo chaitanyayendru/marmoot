@@ -34,8 +34,8 @@ export function sampleGroup(now = Date.now()): Group {
       { kind: 'expense', id: newId(), at, date: daysAgo(2), description: 'Thai takeout', category: 'dining', amount: 8450, paidBy: sana.id, split: { method: 'exact', amounts: { [you.id]: 2250, [meera.id]: 3100, [sana.id]: 3100 } } },
     ],
     recurring: [
-      { id: rentId, description: 'Rent', category: 'rent', amount: 320000, paidBy: you.id, split: { method: 'percent', basisPoints: { [you.id]: 3000, [ravi.id]: 2500, [meera.id]: 2500, [sana.id]: 2000 } }, every: 'month', next: advance(rentDate, 'month') },
-      { id: powerId, description: 'Electricity', category: 'utilities', amount: null, paidBy: ravi.id, split: { method: 'equal', among: all }, every: 'month', next: advance(daysAgo(0), 'month') },
+      { id: rentId, description: 'Rent', category: 'rent', amount: 320000, paidBy: you.id, split: { method: 'percent', basisPoints: { [you.id]: 3000, [ravi.id]: 2500, [meera.id]: 2500, [sana.id]: 2000 } }, every: 'month', next: advance(rentDate, 'month'), day: Number(rentDate.slice(8, 10)) },
+      { id: powerId, description: 'Electricity', category: 'utilities', amount: null, paidBy: ravi.id, split: { method: 'equal', among: all }, every: 'month', next: advance(daysAgo(0), 'month'), day: Number(daysAgo(0).slice(8, 10)) },
     ],
     // This month's power bill has just come in and is waiting for its amount.
     due: [{ recurringId: powerId, date: daysAgo(0) }],

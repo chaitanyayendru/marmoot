@@ -94,7 +94,7 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
     if (every !== 'none') {
       const rid = newId();
       item.recurringId = rid;
-      repeat = { id: rid, description: description.trim() || CATEGORIES.find((c) => c.id === category)!.label, category, amount: varies ? null : total, paidBy, split, every, next: advance(date, every) };
+      repeat = { id: rid, description: description.trim() || CATEGORIES.find((c) => c.id === category)!.label, category, amount: varies ? null : total, paidBy, split, every, next: advance(date, every), day: Number(date.slice(8, 10)) };
     }
     onSave(item, repeat);
   }

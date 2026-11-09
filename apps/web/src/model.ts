@@ -9,6 +9,7 @@ import {
   expenseNets,
   greedySettle,
   minTransferSettle,
+  nextDue,
   paymentNets,
   settlePokerNight,
   sumNets,
@@ -112,6 +113,8 @@ export interface Recurring {
   every: 'week' | 'month';
   /** Next date it falls due, YYYY-MM-DD. */
   next: string;
+  /** Day of the month a monthly bill belongs on, so the 31st survives February. Older saves lack it. */
+  day?: number;
 }
 
 export interface DueBill {
@@ -145,16 +148,9 @@ export function today(now = new Date()): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-/** Next due date: +7 days, or the same day next month (31 Jan -> 28/29 Feb). */
-export function advance(date: string, every: 'week' | 'month'): string {
-  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
-  if (every === 'week') {
-    const t = new Date(Date.UTC(y, m - 1, d + 7));
-    return t.toISOString().slice(0, 10);
-  }
-  const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
-  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
-  return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+/** Next due date: +7 days, or the bill's day next month (31 Jan -> 28 Feb -> 31 Mar). */
+export function advance(date: string, every: 'week' | 'month', anchorDay?: number): string {
+  return nextDue(date, every, anchorDay);
 }
 
 export function shortDate(date: string): string {
@@ -177,7 +173,7 @@ export function catchUpRecurring(g: Group, todayStr: string, newId: () => string
       } else if (!due.some((d) => d.recurringId === r.id && d.date === next)) {
         due.push({ recurringId: r.id, date: next });
       }
-      next = advance(next, r.every);
+      next = advance(next, r.every, r.day);
     }
     return { ...r, next };
   });

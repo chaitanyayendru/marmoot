@@ -3,3 +3,4 @@ export * from './poker.ts';
 export * from './bill.ts';
 export * from './settle.ts';
 export * from './expense.ts';
+export * from './recurring.ts';
