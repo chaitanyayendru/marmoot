@@ -9,7 +9,7 @@
  */
 import type { Transfer } from '@marmoot/core';
 import { linkAmount, usd } from './money.ts';
-import { APP_NAMES, PAY_APPS, type PayApp, type Player } from './model.ts';
+import { APP_NAMES, PAY_APPS, type Member, type PayApp } from './model.ts';
 
 export type PayAction =
   | { kind: 'link'; app: PayApp; label: string; href: string; caveat?: string }
@@ -23,7 +23,7 @@ const clean = {
   zelle: (h: string) => h.trim(),
 } satisfies Record<PayApp, (h: string) => string>;
 
-export function payAction(t: Transfer, payee: Player, note: string): PayAction | null {
+export function payAction(t: Transfer, payee: Member, note: string): PayAction | null {
   const amount = linkAmount(t.amount);
   // Prefer the app the solver matched; without app matching, use the payee's first app.
   const app = (t.rail as PayApp | 'cash' | undefined) ?? PAY_APPS.find((a) => (payee.handles[a] ?? '').trim() !== '') ?? (payee.cash ? 'cash' : undefined);

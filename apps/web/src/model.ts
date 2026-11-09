@@ -1,239 +1,415 @@
 /**
- * A poker night as the web app stores it, plus everything derived from it.
- *
- * The stored shape is an event log (buy-ins and cash handed to the host) plus each
- * player's cash-out. Nets and the settlement plan are never stored: they are
- * recomputed from the log by @marmoot/core every time, the same way the server
- * will once the night lives in Supabase.
+ * The web app's data: groups of people who share costs (a flat, a trip, a poker
+ * crew), the things they spend on, payments between them, recurring bills, and
+ * game nights. Balances are never stored; they are recomputed from the items by
+ * @marmoot/core, the same way the database does.
  */
 import {
   DiscrepancyTooLarge,
+  expenseNets,
   greedySettle,
   minTransferSettle,
+  paymentNets,
   settlePokerNight,
+  sumNets,
   type PlayerLine,
   type PokerEvent,
   type Rails,
+  type Split,
   type Transfer,
 } from '@marmoot/core';
 
+// ------------------------------------------------------------------ people
+
 export type PayApp = 'venmo' | 'zelle' | 'paypal' | 'cashapp';
 export const PAY_APPS: readonly PayApp[] = ['venmo', 'zelle', 'paypal', 'cashapp'];
-export const APP_NAMES: Record<PayApp | 'cash', string> = {
-  venmo: 'Venmo',
-  zelle: 'Zelle',
-  paypal: 'PayPal',
-  cashapp: 'Cash App',
-  cash: 'Cash',
-};
+export const APP_NAMES: Record<PayApp | 'cash', string> = { venmo: 'Venmo', zelle: 'Zelle', paypal: 'PayPal', cashapp: 'Cash App', cash: 'cash' };
 
-export interface Player {
+export interface Member {
   id: string;
   name: string;
-  /** Venmo username, Zelle email or phone, PayPal.me name, Cash App $cashtag. */
+  /** WhatsApp number, as typed. */
+  phone: string;
   handles: Partial<Record<PayApp, string>>;
-  /** Willing to settle in cash before leaving. */
+  /** Happy to settle in cash. */
   cash: boolean;
 }
 
-export type NightEvent =
-  | { id: string; at: number; kind: 'buyin'; player: string; amount: number }
-  | { id: string; at: number; kind: 'cash'; from: string; to: string; amount: number; /** the buy-in this cash paid for */ forBuyIn?: string };
+// ------------------------------------------------------------------ things that happen in a group
 
-/** How buy-ins are paid: handed to the host in cash, or settled at the end. */
+export type Category = 'groceries' | 'utilities' | 'rent' | 'dining' | 'transport' | 'travel' | 'household' | 'fun' | 'game' | 'other';
+export const CATEGORIES: { id: Category; label: string }[] = [
+  { id: 'groceries', label: 'Groceries' },
+  { id: 'utilities', label: 'Utilities' },
+  { id: 'rent', label: 'Rent' },
+  { id: 'dining', label: 'Eating out' },
+  { id: 'household', label: 'Household' },
+  { id: 'transport', label: 'Transport' },
+  { id: 'travel', label: 'Travel' },
+  { id: 'fun', label: 'Fun' },
+  { id: 'other', label: 'Other' },
+];
+export const categoryLabel = (c: Category) => (c === 'game' ? 'Game night' : CATEGORIES.find((x) => x.id === c)?.label ?? 'Other');
+
+export interface ExpenseItem {
+  kind: 'expense';
+  id: string;
+  at: number;
+  /** YYYY-MM-DD */
+  date: string;
+  description: string;
+  category: Category;
+  amount: number;
+  paidBy: string;
+  split: Split;
+  recurringId?: string;
+}
+
+export interface PaymentItem {
+  kind: 'payment';
+  id: string;
+  at: number;
+  date: string;
+  from: string;
+  to: string;
+  amount: number;
+  rail?: string;
+}
+
+export type GameEvent =
+  | { id: string; at: number; kind: 'buyin'; player: string; amount: number }
+  | { id: string; at: number; kind: 'cash'; from: string; to: string; amount: number; forBuyIn?: string };
+
 export type BuyInMode = 'cash-to-host' | 'settle-later';
 
-export interface Night {
+export interface GameItem {
+  kind: 'game';
   id: string;
+  at: number;
+  date: string;
   name: string;
-  createdAt: number;
   buyIn: number;
   mode: BuyInMode;
   tolerance: number;
   hostId: string | null;
-  players: Player[];
-  events: NightEvent[];
-  /** Cents each player cashed out; missing until entered. */
+  players: string[];
+  events: GameEvent[];
   cashouts: Record<string, number>;
-  /** Transfer key -> time it was marked paid. */
-  paid: Record<string, number>;
+  /** Once closed, the night's results count toward the group's balances. */
+  closed: boolean;
 }
+
+export type Item = ExpenseItem | PaymentItem | GameItem;
+
+export interface Recurring {
+  id: string;
+  description: string;
+  category: Category;
+  /** null: the amount changes each time (power, water), so ask for it when it's due. */
+  amount: number | null;
+  paidBy: string;
+  split: Split;
+  every: 'week' | 'month';
+  /** Next date it falls due, YYYY-MM-DD. */
+  next: string;
+}
+
+export interface DueBill {
+  recurringId: string;
+  date: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** The member who is using this device. */
+  me: string;
+  members: Member[];
+  items: Item[];
+  recurring: Recurring[];
+  due: DueBill[];
+}
+
+export type Theme = 'system' | 'light' | 'dark';
 
 export interface State {
-  nights: Night[];
+  groups: Group[];
+  theme: Theme;
 }
 
+// ------------------------------------------------------------------ dates
+
+export function today(now = new Date()): string {
+  const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/** Next due date: +7 days, or the same day next month (31 Jan -> 28/29 Feb). */
+export function advance(date: string, every: 'week' | 'month'): string {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  if (every === 'week') {
+    const t = new Date(Date.UTC(y, m - 1, d + 7));
+    return t.toISOString().slice(0, 10);
+  }
+  const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+}
+
+export function shortDate(date: string): string {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ------------------------------------------------------------------ recurring bills
+
+/** Post fixed recurring bills that have fallen due, and queue variable ones as "enter this month's amount". */
+export function catchUpRecurring(g: Group, todayStr: string, newId: () => string, now: number): Group {
+  if (!g.recurring.some((r) => r.next <= todayStr)) return g;
+  const items = [...g.items];
+  const due = [...g.due];
+  const recurring = g.recurring.map((r) => {
+    let next = r.next;
+    for (let guard = 0; next <= todayStr && guard < 24; guard++) {
+      if (r.amount !== null) {
+        items.push({ kind: 'expense', id: newId(), at: now, date: next, description: r.description, category: r.category, amount: r.amount, paidBy: r.paidBy, split: r.split, recurringId: r.id });
+      } else if (!due.some((d) => d.recurringId === r.id && d.date === next)) {
+        due.push({ recurringId: r.id, date: next });
+      }
+      next = advance(next, r.every);
+    }
+    return { ...r, next };
+  });
+  return { ...g, items, due, recurring };
+}
+
+// ------------------------------------------------------------------ actions
+
 export type Action =
-  | { type: 'createNight'; id: string; name: string; buyIn: number; mode: BuyInMode; at: number }
-  | { type: 'deleteNight'; night: string }
-  | { type: 'addPlayer'; night: string; id: string; name: string }
-  | { type: 'updatePlayer'; night: string; player: Player }
-  | { type: 'removePlayer'; night: string; player: string }
-  | { type: 'setHost'; night: string; player: string | null }
-  | { type: 'buyIn'; night: string; player: string; amount: number; ids: [string, string]; at: number }
-  | { type: 'undo'; night: string; event: string }
-  | { type: 'setCashout'; night: string; player: string; amount: number | null }
-  | { type: 'setMode'; night: string; mode: BuyInMode }
-  | { type: 'togglePaid'; night: string; key: string; at: number };
+  | { type: 'setTheme'; theme: Theme }
+  | { type: 'createGroup'; group: Group }
+  | { type: 'deleteGroup'; group: string }
+  | { type: 'renameGroup'; group: string; name: string }
+  | { type: 'addMember'; group: string; member: Member }
+  | { type: 'updateMember'; group: string; member: Member }
+  | { type: 'removeMember'; group: string; member: string }
+  | { type: 'addItem'; group: string; item: Item }
+  | { type: 'deleteItem'; group: string; item: string }
+  | { type: 'addRecurring'; group: string; recurring: Recurring }
+  | { type: 'deleteRecurring'; group: string; recurring: string }
+  | { type: 'catchUp'; today: string; ids: () => string; now: number }
+  | { type: 'resolveDue'; group: string; recurringId: string; date: string; amount: number | null; id: string; at: number }
+  | { type: 'updateGame'; group: string; game: string; update: GameUpdate };
 
-const mapNight = (s: State, id: string, f: (n: Night) => Night): State => ({
-  nights: s.nights.map((n) => (n.id === id ? f(n) : n)),
-});
+export type GameUpdate =
+  | { kind: 'buyIn'; player: string; amount: number; ids: [string, string]; at: number }
+  | { kind: 'undo'; event: string }
+  | { kind: 'cashout'; player: string; amount: number | null }
+  | { kind: 'mode'; mode: BuyInMode }
+  | { kind: 'host'; player: string }
+  | { kind: 'players'; players: string[] }
+  | { kind: 'close' };
 
-export function reducer(s: State, a: Action): State {
-  switch (a.type) {
-    case 'createNight':
-      return {
-        nights: [
-          { id: a.id, name: a.name, createdAt: a.at, buyIn: a.buyIn, mode: a.mode, tolerance: 0.01, hostId: null, players: [], events: [], cashouts: {}, paid: {} },
-          ...s.nights,
-        ],
-      };
-    case 'deleteNight':
-      return { nights: s.nights.filter((n) => n.id !== a.night) };
-    case 'addPlayer':
-      return mapNight(s, a.night, (n) => ({
-        ...n,
-        players: [...n.players, { id: a.id, name: a.name.trim(), handles: {}, cash: false }],
-        // The first player added is the host until someone says otherwise.
-        hostId: n.hostId ?? a.id,
-      }));
-    case 'updatePlayer':
-      return mapNight(s, a.night, (n) => ({ ...n, players: n.players.map((p) => (p.id === a.player.id ? a.player : p)) }));
-    case 'removePlayer':
-      return mapNight(s, a.night, (n) => {
-        if (n.events.some((e) => (e.kind === 'buyin' ? e.player === a.player : e.from === a.player || e.to === a.player))) return n;
-        const players = n.players.filter((p) => p.id !== a.player);
-        const { [a.player]: _gone, ...cashouts } = n.cashouts;
-        return { ...n, players, cashouts, hostId: n.hostId === a.player ? (players[0]?.id ?? null) : n.hostId };
-      });
-    case 'setHost':
-      return mapNight(s, a.night, (n) => ({ ...n, hostId: a.player }));
-    case 'setMode':
-      return mapNight(s, a.night, (n) => ({ ...n, mode: a.mode }));
-    case 'buyIn':
-      return mapNight(s, a.night, (n) => {
-        const events: NightEvent[] = [{ id: a.ids[0], at: a.at, kind: 'buyin', player: a.player, amount: a.amount }];
-        // In cash-to-host mode the money changed hands at the table, so the host now holds it.
-        if (n.mode === 'cash-to-host' && n.hostId && n.hostId !== a.player) {
-          events.push({ id: a.ids[1], at: a.at, kind: 'cash', from: a.player, to: n.hostId, amount: a.amount, forBuyIn: a.ids[0] });
-        }
-        return { ...n, events: [...n.events, ...events] };
-      });
-    case 'undo':
-      // Undo removes a buy-in together with the cash event recorded in the same tap.
-      return mapNight(s, a.night, (n) => {
-        if (!n.events.some((e) => e.id === a.event)) return n;
-        return { ...n, events: n.events.filter((e) => e.id !== a.event && !(e.kind === 'cash' && e.forBuyIn === a.event)) };
-      });
-    case 'setCashout':
-      return mapNight(s, a.night, (n) => {
-        const cashouts = { ...n.cashouts };
-        if (a.amount === null) delete cashouts[a.player];
-        else cashouts[a.player] = a.amount;
-        return { ...n, cashouts };
-      });
-    case 'togglePaid':
-      return mapNight(s, a.night, (n) => {
-        const paid = { ...n.paid };
-        if (paid[a.key]) delete paid[a.key];
-        else paid[a.key] = a.at;
-        return { ...n, paid };
-      });
+const mapGroup = (s: State, id: string, f: (g: Group) => Group): State => ({ ...s, groups: s.groups.map((g) => (g.id === id ? f(g) : g)) });
+
+export function memberInUse(g: Group, member: string): boolean {
+  return (
+    g.me === member ||
+    g.items.some((i) =>
+      i.kind === 'expense'
+        ? i.paidBy === member || splitPeople(i.split).includes(member)
+        : i.kind === 'payment'
+          ? i.from === member || i.to === member
+          : i.players.includes(member),
+    ) ||
+    g.recurring.some((r) => r.paidBy === member || splitPeople(r.split).includes(member))
+  );
+}
+
+export function splitPeople(s: Split): string[] {
+  switch (s.method) {
+    case 'equal': return s.among;
+    case 'exact': return Object.keys(s.amounts);
+    case 'percent': return Object.keys(s.basisPoints);
+    case 'shares': return Object.keys(s.shares);
   }
 }
 
-export function railsFor(p: Player): string[] {
-  const apps: string[] = PAY_APPS.filter((app) => (p.handles[app] ?? '').trim() !== '');
-  if (p.cash) apps.push('cash');
+function updateGame(game: GameItem, u: GameUpdate): GameItem {
+  if (game.closed) return game;
+  switch (u.kind) {
+    case 'buyIn': {
+      const events: GameEvent[] = [{ id: u.ids[0], at: u.at, kind: 'buyin', player: u.player, amount: u.amount }];
+      if (game.mode === 'cash-to-host' && game.hostId && game.hostId !== u.player) {
+        events.push({ id: u.ids[1], at: u.at, kind: 'cash', from: u.player, to: game.hostId, amount: u.amount, forBuyIn: u.ids[0] });
+      }
+      return { ...game, events: [...game.events, ...events] };
+    }
+    case 'undo':
+      return { ...game, events: game.events.filter((e) => e.id !== u.event && !(e.kind === 'cash' && e.forBuyIn === u.event)) };
+    case 'cashout': {
+      const cashouts = { ...game.cashouts };
+      if (u.amount === null) delete cashouts[u.player];
+      else cashouts[u.player] = u.amount;
+      return { ...game, cashouts };
+    }
+    case 'mode':
+      return { ...game, mode: u.mode };
+    case 'host':
+      return { ...game, hostId: u.player };
+    case 'players': {
+      const keep = u.players.filter((p) => p);
+      const busy = new Set(game.events.flatMap((e) => (e.kind === 'buyin' ? [e.player] : [e.from, e.to])));
+      const players = [...new Set([...keep, ...[...busy].filter((p) => !keep.includes(p))])];
+      return { ...game, players, hostId: game.hostId && players.includes(game.hostId) ? game.hostId : (players[0] ?? null) };
+    }
+    case 'close':
+      return gameResult(game).status === 'ready' ? { ...game, closed: true } : game;
+  }
+}
+
+export function reducer(s: State, a: Action): State {
+  switch (a.type) {
+    case 'setTheme':
+      return { ...s, theme: a.theme };
+    case 'createGroup':
+      return { ...s, groups: [a.group, ...s.groups] };
+    case 'deleteGroup':
+      return { ...s, groups: s.groups.filter((g) => g.id !== a.group) };
+    case 'renameGroup':
+      return mapGroup(s, a.group, (g) => ({ ...g, name: a.name.trim() || g.name }));
+    case 'addMember':
+      return mapGroup(s, a.group, (g) => ({ ...g, members: [...g.members, a.member] }));
+    case 'updateMember':
+      return mapGroup(s, a.group, (g) => ({ ...g, members: g.members.map((m) => (m.id === a.member.id ? a.member : m)) }));
+    case 'removeMember':
+      return mapGroup(s, a.group, (g) => (memberInUse(g, a.member) ? g : { ...g, members: g.members.filter((m) => m.id !== a.member) }));
+    case 'addItem':
+      return mapGroup(s, a.group, (g) => ({ ...g, items: [...g.items, a.item] }));
+    case 'deleteItem':
+      return mapGroup(s, a.group, (g) => ({ ...g, items: g.items.filter((i) => i.id !== a.item) }));
+    case 'addRecurring':
+      return mapGroup(s, a.group, (g) => ({ ...g, recurring: [...g.recurring, a.recurring] }));
+    case 'deleteRecurring':
+      return mapGroup(s, a.group, (g) => ({ ...g, recurring: g.recurring.filter((r) => r.id !== a.recurring), due: g.due.filter((d) => d.recurringId !== a.recurring) }));
+    case 'catchUp': {
+      const groups = s.groups.map((g) => catchUpRecurring(g, a.today, a.ids, a.now));
+      return groups.every((g, i) => g === s.groups[i]) ? s : { ...s, groups };
+    }
+    case 'resolveDue':
+      return mapGroup(s, a.group, (g) => {
+        const r = g.recurring.find((x) => x.id === a.recurringId);
+        const due = g.due.filter((d) => !(d.recurringId === a.recurringId && d.date === a.date));
+        if (!r || a.amount === null) return { ...g, due };
+        const item: ExpenseItem = { kind: 'expense', id: a.id, at: a.at, date: a.date, description: r.description, category: r.category, amount: a.amount, paidBy: r.paidBy, split: r.split, recurringId: r.id };
+        return { ...g, due, items: [...g.items, item] };
+      });
+    case 'updateGame':
+      return mapGroup(s, a.group, (g) => ({ ...g, items: g.items.map((i) => (i.kind === 'game' && i.id === a.game ? updateGame(i, a.update) : i)) }));
+  }
+}
+
+// ------------------------------------------------------------------ game nights
+
+export type GameResult =
+  | { status: 'waiting'; missing: string[] }
+  | { status: 'recount'; discrepancy: number; limit: number }
+  | { status: 'ready'; lines: PlayerLine[]; nets: Map<string, number>; discrepancy: number };
+
+export function gameTotals(game: GameItem) {
+  const totals = new Map<string, { buyins: number; count: number }>(game.players.map((p) => [p, { buyins: 0, count: 0 }]));
+  for (const e of game.events) {
+    if (e.kind !== 'buyin') continue;
+    const t = totals.get(e.player) ?? { buyins: 0, count: 0 };
+    t.buyins += e.amount;
+    t.count += 1;
+    totals.set(e.player, t);
+  }
+  const pot = [...totals.values()].reduce((s, t) => s + t.buyins, 0);
+  const cashedOut = Object.values(game.cashouts).reduce((s, v) => s + v, 0);
+  return { totals, pot, cashedOut };
+}
+
+export function gameResult(game: GameItem): GameResult {
+  const missing = game.players.filter((p) => game.cashouts[p] === undefined);
+  if (game.players.length === 0 || missing.length > 0) return { status: 'waiting', missing };
+  const events: PokerEvent[] = [
+    ...game.events.map((e): PokerEvent => (e.kind === 'buyin' ? { kind: 'buyin', player: e.player, amount: e.amount } : { kind: 'cash', from: e.from, to: e.to, amount: e.amount })),
+    ...game.players.map((p): PokerEvent => ({ kind: 'cashout', player: p, amount: game.cashouts[p] ?? 0 })),
+  ];
+  try {
+    const r = settlePokerNight(events, { discrepancyTolerance: game.tolerance });
+    return { status: 'ready', lines: r.lines, nets: r.nets, discrepancy: r.discrepancy };
+  } catch (err) {
+    if (err instanceof DiscrepancyTooLarge) return { status: 'recount', discrepancy: err.discrepancy, limit: err.limit };
+    throw err;
+  }
+}
+
+// ------------------------------------------------------------------ balances
+
+export function itemNets(i: Item): Map<string, number> {
+  switch (i.kind) {
+    case 'expense':
+      return expenseNets(i.paidBy, i.amount, i.split);
+    case 'payment':
+      return paymentNets(i.from, i.to, i.amount);
+    case 'game': {
+      if (!i.closed) return new Map();
+      const r = gameResult(i);
+      return r.status === 'ready' ? r.nets : new Map();
+    }
+  }
+}
+
+export const byDate = (a: Item, b: Item) => (a.date === b.date ? a.at - b.at : a.date < b.date ? -1 : 1);
+
+export function groupNets(g: Group): Map<string, number> {
+  const nets = sumNets(g.items.map(itemNets));
+  for (const m of g.members) if (!nets.has(m.id)) nets.set(m.id, 0);
+  return nets;
+}
+
+/** Your running balance in this group after each item, oldest first. */
+export function balanceHistory(g: Group): { date: string; value: number }[] {
+  let v = 0;
+  return [...g.items].sort(byDate).map((i) => {
+    v += itemNets(i).get(g.me) ?? 0;
+    return { date: i.date, value: v };
+  });
+}
+
+export function railsFor(m: Member): string[] {
+  const apps: string[] = PAY_APPS.filter((app) => (m.handles[app] ?? '').trim() !== '');
+  if (m.cash) apps.push('cash');
   return apps;
+}
+
+export interface Plan {
+  transfers: Transfer[];
+  greedyCount: number;
+  matched: 'apps' | 'no-apps' | 'infeasible';
+}
+
+export function settlePlan(g: Group): Plan {
+  const nets = groupNets(g);
+  const owing = g.members.filter((m) => (nets.get(m.id) ?? 0) !== 0);
+  const greedyCount = greedySettle(nets).length;
+  if (owing.length > 0 && owing.every((m) => railsFor(m).length > 0)) {
+    const rails: Rails = new Map(g.members.map((m) => [m.id, railsFor(m)]));
+    const r = minTransferSettle(nets, { rails });
+    if (r.feasible) return { transfers: r.transfers, greedyCount, matched: 'apps' };
+    return { transfers: minTransferSettle(nets).transfers, greedyCount, matched: 'infeasible' };
+  }
+  return { transfers: minTransferSettle(nets).transfers, greedyCount, matched: 'no-apps' };
 }
 
 export function transferKey(t: Transfer): string {
   return `${t.from}>${t.to}:${t.amount}`;
 }
 
-export interface PlayerTotals {
-  buyins: number;
-  count: number;
-}
-
-export type Settlement =
-  | { status: 'waiting'; missing: string[] }
-  | { status: 'recount'; discrepancy: number; limit: number }
-  | {
-      status: 'ready';
-      lines: PlayerLine[];
-      discrepancy: number;
-      transfers: Transfer[];
-      /** How many transfers biggest-debtor-pays-biggest-creditor would need. */
-      greedyCount: number;
-      /** 'apps': every transfer is between people who share an app. */
-      matched: 'apps' | 'no-apps' | 'infeasible';
-    };
-
-export interface Derived {
-  pot: number;
-  totals: Map<string, PlayerTotals>;
-  cashedOut: number;
-  settlement: Settlement;
-}
-
-export function derive(n: Night): Derived {
-  const totals = new Map<string, PlayerTotals>(n.players.map((p) => [p.id, { buyins: 0, count: 0 }]));
-  for (const e of n.events) {
-    if (e.kind !== 'buyin') continue;
-    const t = totals.get(e.player);
-    if (t) { t.buyins += e.amount; t.count += 1; }
-  }
-  const pot = [...totals.values()].reduce((s, t) => s + t.buyins, 0);
-  const cashedOut = Object.values(n.cashouts).reduce((s, v) => s + v, 0);
-
-  const missing = n.players.filter((p) => n.cashouts[p.id] === undefined).map((p) => p.id);
-  if (n.players.length === 0 || missing.length > 0) return { pot, totals, cashedOut, settlement: { status: 'waiting', missing } };
-
-  const events: PokerEvent[] = [
-    ...n.events.map((e): PokerEvent => (e.kind === 'buyin' ? { kind: 'buyin', player: e.player, amount: e.amount } : { kind: 'cash', from: e.from, to: e.to, amount: e.amount })),
-    ...n.players.map((p): PokerEvent => ({ kind: 'cashout', player: p.id, amount: n.cashouts[p.id] ?? 0 })),
-  ];
-
-  let night;
-  try {
-    night = settlePokerNight(events, { discrepancyTolerance: n.tolerance });
-  } catch (err) {
-    if (err instanceof DiscrepancyTooLarge) {
-      return { pot, totals, cashedOut, settlement: { status: 'recount', discrepancy: err.discrepancy, limit: err.limit } };
-    }
-    throw err;
-  }
-
-  const greedyCount = greedySettle(night.nets).length;
-  const owing = n.players.filter((p) => (night.nets.get(p.id) ?? 0) !== 0);
-  const everyoneHasAnApp = owing.every((p) => railsFor(p).length > 0);
-
-  let matched: 'apps' | 'no-apps' | 'infeasible' = 'no-apps';
-  let transfers: Transfer[];
-  if (everyoneHasAnApp) {
-    const rails: Rails = new Map(n.players.map((p) => [p.id, railsFor(p)]));
-    const r = minTransferSettle(night.nets, { rails });
-    if (r.feasible) {
-      matched = 'apps';
-      transfers = r.transfers;
-    } else {
-      matched = 'infeasible';
-      transfers = minTransferSettle(night.nets).transfers;
-    }
-  } else {
-    transfers = minTransferSettle(night.nets).transfers;
-  }
-
-  return {
-    pot,
-    totals,
-    cashedOut,
-    settlement: { status: 'ready', lines: night.lines, discrepancy: night.discrepancy, transfers, greedyCount, matched },
-  };
-}
+// ------------------------------------------------------------------ helpers
 
 export function newId(): string {
   try {
@@ -243,7 +419,14 @@ export function newId(): string {
   }
 }
 
-export function defaultNightName(at: number): string {
-  const d = new Date(at);
-  return `Poker, ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+export function newMember(name: string, phone = ''): Member {
+  return { id: newId(), name: name.trim(), phone: phone.trim(), handles: {}, cash: false };
+}
+
+export function newGroup(name: string, me: Member, others: Member[], now: number): Group {
+  return { id: newId(), name: name.trim(), createdAt: now, me: me.id, members: [me, ...others], items: [], recurring: [], due: [] };
+}
+
+export function newGame(players: string[], buyIn: number, mode: BuyInMode, date: string, now: number): GameItem {
+  return { kind: 'game', id: newId(), at: now, date, name: 'Game night', buyIn, mode, tolerance: 0.01, hostId: players[0] ?? null, players, events: [], cashouts: {}, closed: false };
 }

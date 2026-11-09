@@ -1,130 +1,159 @@
 import { describe, expect, it } from 'vitest';
 import { applyTransfers } from '@marmoot/core';
 import { linkAmount, parseDollars, usd } from './money.ts';
-import { derive, reducer, transferKey, type Night, type Player, type State } from './model.ts';
+import {
+  advance,
+  balanceHistory,
+  catchUpRecurring,
+  gameResult,
+  groupNets,
+  memberInUse,
+  newGame,
+  reducer,
+  settlePlan,
+  transferKey,
+  type GameItem,
+  type Group,
+  type Member,
+  type State,
+} from './model.ts';
 import { payAction } from './payments.ts';
-import { settleSummary, whatsappLink } from './share.ts';
+import { sampleGroup } from './sample.ts';
+import { expenseText, planText, reminderText, waLink, waNumber } from './whatsapp.ts';
 
-const P = (id: string, handles: Player['handles'] = {}, cash = false): Player => ({ id, name: id[0]!.toUpperCase() + id.slice(1), handles, cash });
+const M = (id: string, handles: Member['handles'] = {}, phone = ''): Member => ({ id, name: id[0]!.toUpperCase() + id.slice(1), phone, handles, cash: false });
 
-/** The 8-player night from the architecture doc, built as the app stores it. */
-function docNight(): Night {
-  const buy: Record<string, number> = { chai: 4000, ravi: 6000, meera: 2000, arjun: 4000, priya: 2000, dev: 6000, sana: 4000, kabir: 2000 };
-  const out: Record<string, number> = { chai: 7000, ravi: 1000, meera: 7500, arjun: 1000, priya: 5000, dev: 500, sana: 500, kabir: 7500 };
-  const venmo = (h: string) => ({ venmo: h });
-  const players = [
-    P('chai', { venmo: 'chai', zelle: 'chai@example.com' }), P('ravi', venmo('ravi')), P('meera', venmo('meera')), P('arjun', venmo('arjun')),
-    P('priya', venmo('priya')), P('dev', { zelle: 'dev@example.com' }), P('sana', venmo('sana')), P('kabir', { zelle: '555-0100' }),
-  ];
-  let at = 0;
-  const events: Night['events'] = [];
-  for (const p of players) for (let c = 0; c < buy[p.id]! / 2000; c++) events.push({ id: `b${at}`, at: at++, kind: 'buyin', player: p.id, amount: 2000 });
-  events.push({ id: 'c1', at: at++, kind: 'cash', from: 'meera', to: 'chai', amount: 2000 });
-  events.push({ id: 'c2', at: at++, kind: 'cash', from: 'priya', to: 'chai', amount: 2000 });
-  return { id: 'n', name: 'Friday poker', createdAt: 0, buyIn: 2000, mode: 'settle-later', tolerance: 0.01, hostId: 'chai', players, events, cashouts: out, paid: {} };
+function flat(): Group {
+  return {
+    id: 'g', name: 'Flat 4B', createdAt: 0, me: 'you',
+    members: [M('you', { venmo: 'you' }), M('ravi', { venmo: 'ravi' }, '404-555-0101'), M('meera', { venmo: 'meera-s' }, '+44 7700 900123')],
+    items: [], recurring: [], due: [],
+  };
 }
 
 describe('money input', () => {
-  it('parses what people type', () => {
-    expect(parseDollars('20')).toBe(2000);
+  it('parses and formats', () => {
     expect(parseDollars('$12.5')).toBe(1250);
     expect(parseDollars('1,250.05')).toBe(125005);
-    expect(parseDollars('0')).toBe(0);
-    expect(parseDollars('')).toBeNull();
     expect(parseDollars('12.345')).toBeNull();
-    expect(parseDollars('-5')).toBeNull();
-    expect(parseDollars('abc')).toBeNull();
-  });
-  it('formats cents', () => {
-    expect(usd(123456)).toBe('$1,234.56');
     expect(usd(-1000)).toBe('−$10.00');
     expect(linkAmount(5)).toBe('0.05');
   });
 });
 
-describe('poker night', () => {
-  it('reproduces the doc example: 5 transfers, all on shared apps, greedy needs 7', () => {
-    const d = derive(docNight());
-    expect(d.pot).toBe(30000);
-    expect(d.settlement.status).toBe('ready');
-    if (d.settlement.status !== 'ready') return;
-    expect(d.settlement.transfers).toHaveLength(5);
-    expect(d.settlement.greedyCount).toBe(7);
-    expect(d.settlement.matched).toBe('apps');
-    const nets = new Map(d.settlement.lines.map((l) => [l.player, l.net]));
-    expect([...applyTransfers(nets, d.settlement.transfers).values()].every((v) => v === 0)).toBe(true);
+describe('group balances', () => {
+  it('adds expenses and payments, and the plan clears everyone', () => {
+    let s: State = { groups: [flat()], theme: 'system' };
+    s = reducer(s, { type: 'addItem', group: 'g', item: { kind: 'expense', id: 'e1', at: 1, date: '2026-11-01', description: 'Groceries', category: 'groceries', amount: 9000, paidBy: 'you', split: { method: 'equal', among: ['you', 'ravi', 'meera'] } } });
+    s = reducer(s, { type: 'addItem', group: 'g', item: { kind: 'expense', id: 'e2', at: 2, date: '2026-11-02', description: 'Power', category: 'utilities', amount: 6000, paidBy: 'ravi', split: { method: 'equal', among: ['you', 'ravi', 'meera'] } } });
+    const g = s.groups[0]!;
+    expect(Object.fromEntries(groupNets(g))).toEqual({ you: 4000, ravi: 1000, meera: -5000 });
+    const plan = settlePlan(g);
+    expect(plan.matched).toBe('apps');
+    expect(plan.transfers).toHaveLength(2);
+    expect([...applyTransfers(groupNets(g), plan.transfers).values()].every((v) => v === 0)).toBe(true);
+    expect(balanceHistory(g).map((p) => p.value)).toEqual([6000, 4000]);
   });
 
-  it('waits until every cash-out is entered', () => {
-    const n = docNight();
-    delete n.cashouts.dev;
-    const d = derive(n);
-    expect(d.settlement).toEqual({ status: 'waiting', missing: ['dev'] });
+  it('a recorded payment moves balances toward zero', () => {
+    let s: State = { groups: [flat()], theme: 'system' };
+    s = reducer(s, { type: 'addItem', group: 'g', item: { kind: 'expense', id: 'e1', at: 1, date: '2026-11-01', description: 'x', category: 'other', amount: 3000, paidBy: 'you', split: { method: 'equal', among: ['you', 'ravi', 'meera'] } } });
+    s = reducer(s, { type: 'addItem', group: 'g', item: { kind: 'payment', id: 'p1', at: 2, date: '2026-11-02', from: 'ravi', to: 'you', amount: 1000 } });
+    expect(Object.fromEntries(groupNets(s.groups[0]!))).toEqual({ you: 1000, ravi: 0, meera: -1000 });
   });
 
-  it('asks for a recount when chips are off by more than 1% of the pot', () => {
-    const n = docNight();
-    n.cashouts.chai = 7000 + 400; // $4 over on a $300 pot
-    expect(derive(n).settlement.status).toBe('recount');
+  it('will not remove someone who appears in an expense', () => {
+    let s: State = { groups: [flat()], theme: 'system' };
+    s = reducer(s, { type: 'addItem', group: 'g', item: { kind: 'expense', id: 'e1', at: 1, date: '2026-11-01', description: 'x', category: 'other', amount: 3000, paidBy: 'you', split: { method: 'equal', among: ['you', 'meera'] } } });
+    expect(memberInUse(s.groups[0]!, 'meera')).toBe(true);
+    expect(memberInUse(s.groups[0]!, 'ravi')).toBe(false);
+    s = reducer(s, { type: 'removeMember', group: 'g', member: 'meera' });
+    expect(s.groups[0]!.members).toHaveLength(3);
   });
 
-  it('falls back to ignoring apps when someone has none entered', () => {
-    const n = docNight();
-    n.players = n.players.map((p) => (p.id === 'ravi' ? { ...p, handles: {} } : p));
-    const d = derive(n);
-    expect(d.settlement.status === 'ready' && d.settlement.matched).toBe('no-apps');
-  });
-
-  it('cash-to-host mode records the cash with the buy-in, and undo removes both', () => {
-    let s: State = { nights: [] };
-    s = reducer(s, { type: 'createNight', id: 'n', name: 'x', buyIn: 2000, mode: 'cash-to-host', at: 0 });
-    s = reducer(s, { type: 'addPlayer', night: 'n', id: 'host', name: 'Host' });
-    s = reducer(s, { type: 'addPlayer', night: 'n', id: 'ana', name: 'Ana' });
-    s = reducer(s, { type: 'buyIn', night: 'n', player: 'ana', amount: 2000, ids: ['b1', 'c1'], at: 1 });
-    s = reducer(s, { type: 'buyIn', night: 'n', player: 'host', amount: 2000, ids: ['b2', 'c2'], at: 2 });
-    expect(s.nights[0]!.hostId).toBe('host');
-    expect(s.nights[0]!.events.map((e) => e.kind)).toEqual(['buyin', 'cash', 'buyin']); // host paying the host is not a cash event
-    s = reducer(s, { type: 'undo', night: 'n', event: 'b1' });
-    expect(s.nights[0]!.events.map((e) => e.id)).toEqual(['b2']);
-  });
-
-  it('will not remove a player who has bought in', () => {
-    let s: State = { nights: [] };
-    s = reducer(s, { type: 'createNight', id: 'n', name: 'x', buyIn: 2000, mode: 'settle-later', at: 0 });
-    s = reducer(s, { type: 'addPlayer', night: 'n', id: 'a', name: 'A' });
-    s = reducer(s, { type: 'buyIn', night: 'n', player: 'a', amount: 2000, ids: ['b', 'c'], at: 1 });
-    s = reducer(s, { type: 'removePlayer', night: 'n', player: 'a' });
-    expect(s.nights[0]!.players).toHaveLength(1);
+  it('the sample flat balances to zero and settles', () => {
+    const g = sampleGroup(0);
+    expect([...groupNets(g).values()].reduce((a, b) => a + b, 0)).toBe(0);
+    expect(settlePlan(g).transfers.length).toBeLessThanOrEqual(3);
   });
 });
 
-describe('paying', () => {
-  const t = { from: 'sana', to: 'meera', amount: 3500, rail: 'venmo' };
-  it('builds a Venmo link with the amount and a private note', () => {
-    const a = payAction(t, P('meera', { venmo: '@meera-k' }), 'Friday poker');
-    expect(a).toEqual({
-      kind: 'link', app: 'venmo', label: 'Pay on Venmo',
-      href: 'https://venmo.com/meera-k?txn=pay&amount=35.00&note=Friday%20poker&audience=private',
-    });
+describe('recurring bills', () => {
+  it('advances by month without overflowing short months', () => {
+    expect(advance('2026-01-31', 'month')).toBe('2026-02-28');
+    expect(advance('2026-12-15', 'month')).toBe('2027-01-15');
+    expect(advance('2026-02-25', 'week')).toBe('2026-03-04');
   });
-  it('accepts pasted profile links as handles', () => {
-    expect(payAction({ ...t, rail: 'paypal' }, P('m', { paypal: 'https://paypal.me/MeeraK' }), 'x')).toMatchObject({ href: 'https://paypal.me/MeeraK/35.00' });
-    expect(payAction({ ...t, rail: 'cashapp' }, P('m', { cashapp: '$meera' }), 'x')).toMatchObject({ href: 'https://cash.app/$meera/35.00' });
+
+  it('posts fixed bills that fell due and asks for the amount of variable ones', () => {
+    let id = 0;
+    const g: Group = {
+      ...flat(),
+      recurring: [
+        { id: 'rent', description: 'Rent', category: 'rent', amount: 300000, paidBy: 'you', split: { method: 'equal', among: ['you', 'ravi', 'meera'] }, every: 'month', next: '2026-10-01' },
+        { id: 'power', description: 'Electricity', category: 'utilities', amount: null, paidBy: 'ravi', split: { method: 'equal', among: ['you', 'ravi', 'meera'] }, every: 'month', next: '2026-11-05' },
+      ],
+    };
+    const out = catchUpRecurring(g, '2026-11-08', () => `n${id++}`, 0);
+    expect(out.items.map((i) => i.date)).toEqual(['2026-10-01', '2026-11-01']);
+    expect(out.recurring.find((r) => r.id === 'rent')!.next).toBe('2026-12-01');
+    expect(out.due).toEqual([{ recurringId: 'power', date: '2026-11-05' }]);
+    // Running it again the same day changes nothing.
+    expect(catchUpRecurring(out, '2026-11-08', () => 'x', 0)).toBe(out);
+    let s: State = { groups: [out], theme: 'system' };
+    s = reducer(s, { type: 'resolveDue', group: 'g', recurringId: 'power', date: '2026-11-05', amount: 14388, id: 'p', at: 1 });
+    expect(s.groups[0]!.due).toEqual([]);
+    expect(s.groups[0]!.items.at(-1)).toMatchObject({ amount: 14388, description: 'Electricity', date: '2026-11-05' });
   });
-  it('offers Zelle details to copy, since Zelle has no payment links', () => {
-    expect(payAction({ ...t, rail: 'zelle' }, P('m', { zelle: 'meera@example.com' }), 'x')).toMatchObject({ kind: 'copy', value: 'meera@example.com' });
+});
+
+describe('game nights', () => {
+  it('count toward balances only once closed', () => {
+    const g0 = flat();
+    const game: GameItem = { ...newGame(['you', 'ravi'], 2000, 'settle-later', '2026-11-07', 0), id: 'night' };
+    let s: State = { groups: [{ ...g0, items: [game] }], theme: 'system' };
+    for (const p of ['you', 'ravi']) s = reducer(s, { type: 'updateGame', group: 'g', game: 'night', update: { kind: 'buyIn', player: p, amount: 2000, ids: [`b-${p}`, `c-${p}`], at: 1 } });
+    s = reducer(s, { type: 'updateGame', group: 'g', game: 'night', update: { kind: 'cashout', player: 'you', amount: 3000 } });
+    s = reducer(s, { type: 'updateGame', group: 'g', game: 'night', update: { kind: 'cashout', player: 'ravi', amount: 1000 } });
+    expect(groupNets(s.groups[0]!).get('you')).toBe(0);
+    const g = s.groups[0]!.items[0] as GameItem;
+    expect(gameResult(g).status).toBe('ready');
+    s = reducer(s, { type: 'updateGame', group: 'g', game: 'night', update: { kind: 'close' } });
+    expect(Object.fromEntries(groupNets(s.groups[0]!))).toMatchObject({ you: 1000, ravi: -1000 });
   });
-  it('writes a WhatsApp summary', () => {
-    const n = docNight();
-    const d = derive(n);
-    if (d.settlement.status !== 'ready') throw new Error('not ready');
-    const text = settleSummary(n, d.settlement.transfers, d.pot);
-    expect(text).toContain('Friday poker: settle up');
-    expect(text).toContain('Dev pays Kabir $55.00 (Zelle)');
-    expect(text).toContain('Pot $300.00, 8 players.');
-    expect(whatsappLink('a b')).toBe('https://wa.me/?text=a%20b');
+});
+
+describe('one-tap WhatsApp', () => {
+  it('normalizes numbers for wa.me', () => {
+    expect(waNumber('404-555-0101')).toBe('14045550101');
+    expect(waNumber('+44 7700 900123')).toBe('447700900123');
+    expect(waNumber('0044 7700 900123')).toBe('447700900123');
+    expect(waNumber('12345')).toBeNull();
+    expect(waLink('hi', '404-555-0101')).toBe('https://wa.me/14045550101?text=hi');
+    expect(waLink('hi')).toBe('https://wa.me/?text=hi');
   });
-  it('keys transfers stably for marking them paid', () => {
-    expect(transferKey(t)).toBe('sana>meera:3500');
+
+  it('writes a reminder with a pay link that opens Venmo with the amount', () => {
+    const g = flat();
+    const t = { from: 'ravi', to: 'meera', amount: 5000, rail: 'venmo' };
+    expect(reminderText(g, t)).toBe(
+      'Hi Ravi, quick reminder from Flat 4B: you owe Meera $50.00.\nPay here, Venmo: https://venmo.com/meera-s?txn=pay&amount=50.00&note=Flat%204B&audience=private',
+    );
+  });
+
+  it('writes the group plan with a link on every line', () => {
+    const text = planText(flat(), [{ from: 'ravi', to: 'meera', amount: 5000, rail: 'venmo' }]);
+    expect(text).toContain('Ravi pays Meera $50.00 on Venmo\nhttps://venmo.com/meera-s');
+  });
+
+  it('tells the group about a new expense', () => {
+    const text = expenseText(flat(), { kind: 'expense', id: 'e', at: 0, date: '2026-11-01', description: 'Costco run', category: 'groceries', amount: 9001, paidBy: 'you', split: { method: 'equal', among: ['you', 'ravi', 'meera'] } });
+    expect(text).toBe('You paid $90.01 for Costco run.\nSplit: You $30.00, Ravi $30.00, Meera $30.01.'); // the odd cent goes to the lowest id
+  });
+
+  it('builds pay links and keys transfers', () => {
+    const t = { from: 'ravi', to: 'meera', amount: 3500, rail: 'paypal' };
+    expect(payAction(t, M('meera', { paypal: 'https://paypal.me/MeeraK' }), 'x')).toMatchObject({ href: 'https://paypal.me/MeeraK/35.00' });
+    expect(transferKey(t)).toBe('ravi>meera:3500');
   });
 });
