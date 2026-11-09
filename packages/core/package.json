@@ -1,0 +1,16 @@
+{
+  "name": "@marmoot/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Settlement core: ledger math, poker nights, itemized bills, fewest-transfer payment mapping. No runtime dependencies; runs in Node, Deno and the browser.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "example": "node --experimental-strip-types --no-warnings scripts/poker-night.ts",
+    "bench": "node --experimental-strip-types --no-warnings scripts/bench.ts"
+  }
+}

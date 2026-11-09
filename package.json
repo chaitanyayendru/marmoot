@@ -2,17 +2,25 @@
   "name": "marmoot",
   "version": "0.1.0",
   "private": true,
-  "description": "Settlement core for Marmoot: ledger math, poker nights, itemized bills, fewest-transfer payment mapping.",
   "type": "module",
-  "engines": { "node": ">=22.6" },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
-    "typecheck": "tsc --noEmit",
-    "example": "node --experimental-strip-types --no-warnings scripts/poker-night.ts",
-    "bench": "node --experimental-strip-types --no-warnings scripts/bench.ts"
+    "test": "npm run test --workspaces --if-present && npm run test:db",
+    "test:db": "node --experimental-strip-types --no-warnings supabase/tests/run.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev": "npm run dev -w @marmoot/web",
+    "build": "npm run build -w @marmoot/web"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
     "typescript": "^5.8.0"
   }
 }
