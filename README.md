@@ -15,17 +15,21 @@ Split the bills you share (groceries, rent, utilities, trips, dinners, game nigh
 
 ## Run it
 
+Step-by-step setup for Windows, testing on your phone, a hand-testing checklist and fixes for common errors: **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)**.
+
 Requires Node 22.6 or newer.
 
 ```sh
 npm install
 npm run dev          # web app at http://localhost:5173
+npm run dev:phone    # the same, reachable from a phone on your Wi-Fi
+npm run preview      # production build served at http://localhost:4173
 npm test             # core, web and database tests
 npm run typecheck
 npm run build        # production build in apps/web/dist
 ```
 
-The database tests need Postgres binaries (`initdb`, `postgres`) on your PATH, at `PG_BIN`, or under `/usr/lib/postgresql/<version>/bin`. Without them they skip with a message. To run them against an existing throwaway database instead, set `DATABASE_URL`.
+The database tests start a throwaway Postgres 16+ from `PG_BIN`, `pg_config` on your PATH, or the usual install folders (`C:\Program Files\PostgreSQL\<version>\bin` on Windows). Without one they skip with a message. To run them against an existing throwaway database instead, set `DATABASE_URL`.
 
 ## Deploying for free
 

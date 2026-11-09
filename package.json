@@ -15,6 +15,8 @@
     "test:db": "node --experimental-strip-types --no-warnings supabase/tests/run.ts",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p supabase/tests",
     "dev": "npm run dev -w @marmoot/web",
+    "dev:phone": "npm run dev -w @marmoot/web -- --host",
+    "preview": "npm run build && npm run preview -w @marmoot/web",
     "build": "npm run build -w @marmoot/web"
   },
   "devDependencies": {

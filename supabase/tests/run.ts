@@ -23,6 +23,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import {
@@ -38,19 +39,28 @@ import {
   type Split,
 } from '../../packages/core/src/index.ts';
 
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 
 // ------------------------------------------------------------------ database lifecycle
 
+const isWindows = process.platform === 'win32';
+const exe = (name: string) => (isWindows ? `${name}.exe` : name);
+const hasInitdb = (dir: string) => existsSync(join(dir, exe('initdb')));
+
+/** Postgres server binaries: PG_BIN, then pg_config on PATH, then the usual install folders. */
 function findPgBin(): string | null {
-  if (process.env.PG_BIN && existsSync(join(process.env.PG_BIN, 'initdb'))) return process.env.PG_BIN;
+  if (process.env.PG_BIN && hasInitdb(process.env.PG_BIN)) return process.env.PG_BIN;
   try {
     const dir = execFileSync('pg_config', ['--bindir'], { encoding: 'utf8' }).trim();
-    if (existsSync(join(dir, 'initdb'))) return dir;
-  } catch { /* not installed */ }
-  const base = '/usr/lib/postgresql';
-  if (existsSync(base)) {
-    for (const v of readdirSync(base).sort().reverse()) if (existsSync(join(base, v, 'bin', 'initdb'))) return join(base, v, 'bin');
+    if (hasInitdb(dir)) return dir;
+  } catch { /* not on PATH */ }
+  const bases = isWindows
+    ? [join(process.env.ProgramFiles ?? 'C:\\Program Files', 'PostgreSQL')]
+    : ['/usr/lib/postgresql', '/opt/homebrew/opt', '/usr/local/opt'];
+  for (const base of bases) {
+    if (!existsSync(base)) continue;
+    const versions = readdirSync(base).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const v of versions) if (hasInitdb(join(base, v, 'bin'))) return join(base, v, 'bin');
   }
   return null;
 }
@@ -66,13 +76,18 @@ async function startCluster(): Promise<string | null> {
   chmodSync(dataDir, 0o777);
   // initdb refuses to run as root; use the postgres system user when we are root.
   const asPg = (cmd: string, args: string[]) => (process.getuid?.() === 0 ? ['runuser', ['-u', 'postgres', '--', cmd, ...args]] as const : [cmd, args] as const);
-  const [c1, a1] = asPg(join(bin, 'initdb'), ['-D', join(dataDir, 'data'), '-U', 'postgres', '--auth=trust', '-E', 'UTF8', '--no-locale']);
+  const [c1, a1] = asPg(join(bin, exe('initdb')), ['-D', join(dataDir, 'data'), '-U', 'postgres', '--auth=trust', '-E', 'UTF8', '--no-locale']);
   execFileSync(c1, a1, { stdio: 'ignore' });
   const port = String(55000 + Math.floor(Math.random() * 5000));
-  const [c2, a2] = asPg(join(bin, 'postgres'), ['-D', join(dataDir, 'data'), '-k', dataDir, '-p', port, '-c', "listen_addresses=", '-c', 'fsync=off']);
+  // A Unix socket in the temp folder on Linux and macOS; a localhost-only TCP port on Windows.
+  const tcp = isWindows || !!process.env.PG_TCP;
+  const listen = tcp ? ['-c', 'listen_addresses=localhost'] : ['-k', dataDir, '-c', 'listen_addresses='];
+  const [c2, a2] = asPg(join(bin, exe('postgres')), ['-D', join(dataDir, 'data'), '-p', port, ...listen, '-c', 'fsync=off']);
   server = spawn(c2, a2, { stdio: 'ignore' });
-  const url = `postgresql://postgres@/postgres?host=${encodeURIComponent(dataDir)}&port=${port}`;
-  for (let i = 0; i < 100; i++) {
+  const url = tcp
+    ? `postgresql://postgres@localhost:${port}/postgres`
+    : `postgresql://postgres@/postgres?host=${encodeURIComponent(dataDir)}&port=${port}`;
+  for (let i = 0; i < 150; i++) {
     try {
       const c = new pg.Client({ connectionString: url });
       await c.connect();
@@ -85,9 +100,19 @@ async function startCluster(): Promise<string | null> {
   throw new Error('temporary Postgres did not start');
 }
 
-function stopCluster() {
-  server?.kill('SIGINT');
-  if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+async function stopCluster() {
+  if (server && server.exitCode === null) {
+    const exited = new Promise((r) => server!.once('exit', r));
+    server.kill('SIGINT');
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+  }
+  if (dataDir) {
+    try {
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      console.warn(`could not remove the temporary database at ${dataDir}`);
+    }
+  }
 }
 
 // ------------------------------------------------------------------ helpers
@@ -177,7 +202,10 @@ let url: string | null = null;
 
 before(async () => {
   url = await startCluster();
-  if (!url) return;
+  if (!url) {
+    console.log('# database tests skipped: no Postgres found. Install PostgreSQL 16 or newer, or set PG_BIN or DATABASE_URL.');
+    return;
+  }
   db = new pg.Client({ connectionString: url });
   await db.connect();
   await db.query(readFileSync(join(root, 'tests/auth-stub.sql'), 'utf8'));
@@ -189,7 +217,7 @@ before(async () => {
 
 after(async () => {
   await db?.end();
-  stopCluster();
+  await stopCluster();
 });
 
 describe('database', () => {
