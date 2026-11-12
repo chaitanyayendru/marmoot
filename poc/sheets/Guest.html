@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --surface:#f3f4f3; --line:#e4e6e4; --ink:#000; --muted:#696e69; --green:#00c805; --green-ink:#007a03; --red-ink:#c23b00; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#000; --surface:#121412; --line:#262826; --ink:#fff; --muted:#9ba19b; --green-ink:#00c805; --red-ink:#ff5000; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+  main { max-width:32rem; margin:0 auto; padding:12px 16px 64px; display:grid; gap:16px; }
+  .brand { font-weight:700; font-size:1.15rem; min-height:44px; display:flex; align-items:center; }
+  .title { color:var(--muted); font-weight:500; margin:0; }
+  .amount { font-size:2.6rem; font-weight:650; letter-spacing:-.03em; margin:0; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .muted, .fine { color:var(--muted); } .fine { font-size:.85rem; } .warn { color:var(--red-ink); }
+  h2 { font-size:.85rem; color:var(--muted); margin:8px 0 0; font-weight:600; }
+  button { font:inherit; font-weight:600; border:1px solid var(--line); background:transparent; color:var(--ink); border-radius:999px; min-height:46px; padding:8px 18px; cursor:pointer; }
+  .primary { background:var(--green); border-color:var(--green); color:#000; }
+  .wide { width:100%; } .link { border:0; min-height:0; padding:0; text-decoration:underline; font-weight:500; }
+  button:disabled { opacity:.45; }
+  .names { display:flex; flex-wrap:wrap; gap:8px; }
+  .names button.on { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  ul { list-style:none; margin:0; padding:0; }
+  .item { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); cursor:pointer; }
+  .item .main { flex:1; min-width:0; display:grid; }
+  .item .name { font-weight:600; }
+  .item.off .name { color:var(--muted); text-decoration:line-through; }
+  .item .who { font-size:.85rem; color:var(--muted); }
+  .item .end { text-align:right; font-variant-numeric:tabular-nums; }
+  .item .you { font-size:.85rem; color:var(--green-ink); }
+  input.switch { appearance:none; -webkit-appearance:none; width:44px; height:26px; border-radius:999px; background:var(--line); position:relative; flex:none; margin:0; cursor:pointer; transition:background .12s; }
+  input.switch::after { content:''; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .12s; }
+  input.switch:checked { background:var(--green); }
+  input.switch:checked::after { transform:translateX(18px); }
+  .card { background:var(--surface); border-radius:16px; padding:12px 14px; display:grid; gap:6px; }
+  .line { display:flex; justify-content:space-between; gap:12px; font-variant-numeric:tabular-nums; }
+  .line.total { font-weight:650; border-top:1px solid var(--line); padding-top:6px; }
+  .tag { font-size:.75rem; font-weight:650; border-radius:999px; padding:1px 8px; background:var(--surface); color:var(--muted); }
+  .tag.done { background:color-mix(in srgb, var(--green) 18%, transparent); color:var(--green-ink); }
+  .everyone li { display:flex; justify-content:space-between; padding:6px 0; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <span class="brand">Marmoot</span>
+  <p id="loading" class="muted">Opening the bill…</p>
+  <p id="error" class="warn" hidden></p>
+
+  <div id="app" hidden>
+    <section>
+      <p class="title" id="title"></p>
+      <p class="amount" id="mine">$0.00</p>
+      <p class="muted" id="sub"></p>
+    </section>
+
+    <section id="pick">
+      <h2>Who are you?</h2>
+      <div class="names" id="names"></div>
+    </section>
+
+    <section id="mineSec" hidden>
+      <p class="muted" id="hint">Untick anything you didn't have. Tax and tip follow what you keep.</p>
+      <ul id="items"></ul>
+      <div class="card" style="margin-top:12px">
+        <div class="line"><span>Your items</span><span id="myItems"></span></div>
+        <div class="line"><span>Your share of tax and tip</span><span id="myExtras"></span></div>
+        <div class="line total"><span id="payLabel">You pay</span><span id="myTotal"></span></div>
+      </div>
+      <div style="display:grid;gap:10px;margin-top:12px" id="actions">
+        <button class="primary wide" id="done">Done, that's my part</button>
+        <p id="thanks" class="card" hidden></p>
+        <button class="link" id="allOff">I wasn't part of this bill</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Everyone</h2>
+      <ul class="everyone" id="everyone"></ul>
+    </section>
+    <p class="fine">Changes show up in the shared Google Sheet right away.</p>
+  </div>
+</main>
+
+<script>
+var B = null, T = null, me = null, state = null, busy = false;
+var $ = function (id) { return document.getElementById(id); };
+
+function call(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) { reject(e && e.message ? e : new Error(String(e))); });
+    runner[fn].apply(runner, args);
+  });
+}
+function usd(c) {
+  var a = Math.abs(c), d = Math.floor(a / 100).toString().replace(/\B(?=(\d{3})+$)/g, ',');
+  return (c < 0 ? '-$' : '$') + d + '.' + ('0' + (a % 100)).slice(-2);
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function first(n) { return String(n).split(/\s+/)[0]; }
+function remember(v) { try { if (v === null) localStorage.removeItem('marmoot:' + B); else localStorage.setItem('marmoot:' + B, String(v)); } catch (e) {} }
+function recall() { try { var v = localStorage.getItem('marmoot:' + B); return v === null ? null : Number(v); } catch (e) { return null; } }
+
+google.script.url.getLocation(function (loc) {
+  B = loc.parameter.b; T = loc.parameter.t;
+  me = recall();
+  refresh();
+  setInterval(function () { if (!busy && document.visibilityState === 'visible') refresh(true); }, 15000);
+});
+
+function refresh(quiet) {
+  call('guestView', B, T).then(render).catch(function (e) { if (!quiet) fail(e); });
+}
+
+function fail(e) {
+  $('loading').hidden = true;
+  $('error').textContent = e.message || String(e);
+  $('error').hidden = false;
+}
+
+function change(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  busy = true;
+  $('error').hidden = true;
+  return call.apply(null, [fn, B, T, me].concat(args)).then(render).catch(function (e) { fail(e); refresh(true); }).then(function () { busy = false; });
+}
+
+function render(s) {
+  state = s;
+  $('loading').hidden = true;
+  $('app').hidden = false;
+  if (me !== null && !(me >= 0 && me < s.members.length)) { me = null; remember(null); }
+  var owner = first(s.ownerName);
+  $('title').textContent = owner + '’s bill: ' + s.title;
+
+  $('names').innerHTML = '';
+  s.members.forEach(function (m, j) {
+    var b = document.createElement('button');
+    b.textContent = m.name;
+    if (j === me) b.className = 'on';
+    b.onclick = function () { me = j; remember(j); render(state); };
+    $('names').appendChild(b);
+  });
+
+  $('mineSec').hidden = me === null;
+  if (me === null) {
+    $('mine').textContent = usd(s.total);
+    $('sub').textContent = 'Total bill. Tap your name to see your part.';
+  } else {
+    var m = s.members[me];
+    $('mine').textContent = usd(m.total);
+    $('sub').textContent = (m.isPayer ? 'Your share. You paid ' : 'Your share of ') + usd(s.total) + (s.locked ? ', final' : '');
+    $('payLabel').textContent = m.isPayer ? 'Your share' : 'You pay ' + owner;
+    $('myItems').textContent = usd(m.items);
+    $('myExtras').textContent = usd(m.extras);
+    $('myTotal').textContent = usd(m.total);
+
+    $('items').innerHTML = '';
+    s.items.forEach(function (it, i) {
+      var on = s.checks[i][me];
+      var who = s.members.filter(function (x, j) { return s.checks[i][j]; }).map(function (x, j) { return x.name; });
+      var li = document.createElement('li');
+      li.innerHTML = '<label class="item' + (on ? '' : ' off') + '"><input type="checkbox" class="switch"' + (on ? ' checked' : '') + (s.locked ? ' disabled' : '') + '>' +
+        '<span class="main"><span class="name">' + esc(it.name) + '</span><span class="who">' +
+        (who.length ? esc(who.map(first).join(', ')) : 'Nobody: ' + esc(owner) + ' covers it') + '</span></span>' +
+        '<span class="end"><span>' + usd(it.price) + '</span><br><span class="you">' + (on && s.cells[i][me] !== null ? 'you ' + usd(s.cells[i][me]) : '') + '</span></span></label>';
+      li.querySelector('input').onchange = function () { change('guestToggle', i, this.checked); };
+      $('items').appendChild(li);
+    });
+
+    var anyOn = s.checks.some(function (row) { return row[me]; });
+    $('actions').hidden = s.locked;
+    $('done').hidden = m.done;
+    $('thanks').hidden = !m.done;
+    $('thanks').innerHTML = 'Thanks. ' + esc(owner) + ' can see your choices. You can still change them until the bill goes into Splitwise. <button class="link" id="undoDone">Not done yet</button>';
+    var undo = $('undoDone'); if (undo) undo.onclick = function () { change('guestDone', false); };
+    $('allOff').textContent = anyOn ? 'I wasn’t part of this bill' : 'Put me back in for everything';
+    $('allOff').onclick = function () { change('guestSetAll', !anyOn); };
+    $('hint').textContent = s.locked ? owner + ' added this bill to Splitwise. These amounts are final.' : 'Untick anything you didn’t have. Tax and tip follow what you keep.';
+  }
+
+  $('everyone').innerHTML = s.members.map(function (m, j) {
+    var tag = m.isPayer ? '<span class="tag">paid</span>' : m.done ? '<span class="tag done">Done</span>' : '<span class="tag">waiting</span>';
+    return '<li><span>' + esc(m.name) + (j === me ? ' (you)' : '') + ' ' + tag + '</span><span>' + usd(m.total) + '</span></li>';
+  }).join('');
+}
+
+$('done').onclick = function () { change('guestDone', true); };
+</script>
+</body>
+</html>

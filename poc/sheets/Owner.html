@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --surface:#f3f4f3; --line:#e4e6e4; --ink:#000; --muted:#696e69; --green:#00c805; --green-ink:#007a03; --red-ink:#c23b00; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#000; --surface:#121412; --line:#262826; --ink:#fff; --muted:#9ba19b; --green-ink:#00c805; --red-ink:#ff5000; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+  main { max-width:32rem; margin:0 auto; padding:12px 16px 64px; display:grid; gap:18px; }
+  header { display:flex; justify-content:space-between; align-items:center; min-height:44px; }
+  h1 { font-size:1.6rem; margin:0; letter-spacing:-.02em; } h2 { font-size:1.05rem; margin:0 0 8px; }
+  .brand { font-weight:700; font-size:1.15rem; }
+  .muted, .fine { color:var(--muted); } .fine { font-size:.85rem; } .warn { color:var(--red-ink); font-size:.9rem; }
+  .card { background:var(--surface); border-radius:16px; padding:14px; display:grid; gap:10px; }
+  button, .btn { font:inherit; font-weight:600; border:1px solid var(--line); background:transparent; color:var(--ink); border-radius:999px; min-height:46px; padding:8px 18px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+  .primary { background:var(--green); border-color:var(--green); color:#000; }
+  .wide { width:100%; } .small { min-height:36px; padding:4px 12px; font-size:.9rem; }
+  button:disabled { opacity:.45; cursor:default; }
+  .link { border:0; min-height:0; padding:0; text-decoration:underline; font-weight:500; }
+  input, select { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:12px; min-height:46px; padding:8px 12px; width:100%; }
+  input:focus, select:focus { outline:none; border-color:var(--ink); }
+  label.field { display:grid; gap:4px; } label.field > span { font-size:.85rem; color:var(--muted); font-weight:500; }
+  .scan { display:flex; align-items:center; justify-content:center; gap:8px; min-height:64px; border-radius:16px; background:var(--green); color:#000; font-weight:700; font-size:1.1rem; cursor:pointer; }
+  .scan input { display:none; }
+  .rows { display:grid; gap:6px; }
+  .row { display:grid; grid-template-columns:1fr 6.5rem 40px; gap:6px; align-items:center; }
+  .row input.price, .two input { text-align:right; }
+  .row button { min-height:40px; padding:0; border:0; color:var(--muted); font-size:1.2rem; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .check { display:flex; align-items:center; gap:10px; min-height:40px; }
+  .check input { width:20px; height:20px; min-height:0; accent-color:var(--green); }
+  .sum { display:flex; justify-content:space-between; font-weight:650; }
+  .actions { display:grid; gap:8px; }
+  img.thumb { max-height:140px; border-radius:12px; justify-self:start; }
+  .bill { display:grid; gap:8px; padding:14px; border-radius:16px; border:1px solid var(--line); }
+  .bill-head { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+  .people { list-style:none; margin:0; padding:0; display:grid; gap:2px; font-size:.95rem; }
+  .people li { display:flex; justify-content:space-between; gap:8px; }
+  .tag { font-size:.75rem; font-weight:650; border-radius:999px; padding:1px 8px; background:var(--surface); color:var(--muted); }
+  .tag.done { background:color-mix(in srgb, var(--green) 18%, transparent); color:var(--green-ink); }
+  .num { font-variant-numeric:tabular-nums; }
+  .spin { display:inline-block; width:16px; height:16px; border:2px solid var(--line); border-top-color:var(--ink); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="brand">Marmoot</span>
+    <button class="small" id="settingsBtn">Settings</button>
+  </header>
+
+  <p id="error" class="warn" hidden></p>
+
+  <section id="settings" class="card" hidden>
+    <h2>Settings</h2>
+    <label class="field"><span>Your name, as roommates see it</span><input id="sName" placeholder="Chai"></label>
+    <label class="field"><span>Gemini API key (reads receipts)</span><input id="sGemini" type="password" autocomplete="off" placeholder="Saved keys stay hidden"></label>
+    <label class="field"><span>Splitwise API key</span><input id="sSplitwise" type="password" autocomplete="off" placeholder="Saved keys stay hidden"></label>
+    <label class="field"><span>Roommates, if you don't use Splitwise (comma separated)</span><input id="sMembers" placeholder="Chandu, Hima"></label>
+    <label class="field"><span>Web app address (only if links come out wrong)</span><input id="sUrl" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <p class="fine" id="sState"></p>
+    <button class="primary" id="saveSettings">Save</button>
+  </section>
+
+  <section id="newBill" class="card">
+    <h1>New bill</h1>
+    <label class="scan" id="scanLabel">Scan the receipt<input type="file" accept="image/*" capture="environment" id="photo"></label>
+    <button class="link" id="manual">or type the items in</button>
+    <p id="scanStatus" class="muted" hidden></p>
+    <ul id="warnings" class="warn" hidden></ul>
+
+    <div id="review" class="actions" hidden>
+      <img id="thumb" class="thumb" alt="Your receipt" hidden>
+      <label class="field"><span>What for</span><input id="title" placeholder="Costco"></label>
+      <div>
+        <h2>Items</h2>
+        <div id="items" class="rows"></div>
+        <button class="small" id="addItem" style="margin-top:6px">Add item</button>
+      </div>
+      <div class="two">
+        <label class="field"><span>Tax</span><input id="tax" inputmode="decimal" placeholder="0.00"></label>
+        <label class="field"><span>Tip</span><input id="tip" inputmode="decimal" placeholder="0.00"></label>
+      </div>
+      <p class="sum"><span>Total</span><span id="total" class="num">$0.00</span></p>
+      <p id="totalCheck" class="fine" hidden></p>
+
+      <div>
+        <h2>Who's in</h2>
+        <label class="field" id="groupField" hidden><span>Splitwise group</span><select id="group"></select></label>
+        <div id="members" class="rows"></div>
+        <div class="row" style="grid-template-columns:1fr auto;margin-top:6px">
+          <input id="extraName" placeholder="Someone else">
+          <button class="small" id="addPerson">Add</button>
+        </div>
+      </div>
+      <label class="field"><span>Paid by</span><select id="payer"></select></label>
+      <p class="fine">Everyone starts in for every item. People untick what they didn't have.</p>
+      <button class="primary wide" id="create">Create the sheet</button>
+    </div>
+
+    <div id="created" class="actions" hidden>
+      <p><strong>Sheet ready.</strong> Share it in your group chat. Everyone's ticked for everything until they untick.</p>
+      <a class="btn primary wide" id="shareWa" target="_blank" rel="noopener">Share in WhatsApp group</a>
+      <a class="btn wide" id="openSheet" target="_blank" rel="noopener">Open the sheet</a>
+      <button class="wide" id="copyLink">Copy roommates' link</button>
+      <input id="linkBox" readonly hidden>
+      <button class="link" id="another">Start another bill</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="bill-head"><h2>Your bills</h2><button class="small" id="refresh">Refresh</button></div>
+    <div id="bills" class="rows"></div>
+    <p class="fine" id="noBills">No bills yet.</p>
+  </section>
+</main>
+
+<script>
+var KEY = null;
+var boot = null;           // ownerBootstrap result
+var receiptTotal = 0;      // what the receipt said, to compare
+var people = [];           // [{ name, splitwiseId, on }]
+
+var $ = function (id) { return document.getElementById(id); };
+
+function call(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) { reject(e && e.message ? e : new Error(String(e))); });
+    runner[fn].apply(runner, args);
+  });
+}
+
+function parseMoney(s) {
+  s = String(s == null ? '' : s).replace(/[$,\s]/g, '');
+  if (s === '') return 0;
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  var p = s.split('.');
+  return Number(p[0]) * 100 + Number(((p[1] || '') + '00').slice(0, 2));
+}
+function usd(c) {
+  var a = Math.abs(c), d = Math.floor(a / 100).toString().replace(/\B(?=(\d{3})+$)/g, ',');
+  return (c < 0 ? '-$' : '$') + d + '.' + ('0' + (a % 100)).slice(-2);
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+function showError(e) {
+  $('error').textContent = e ? (e.message || String(e)) : '';
+  $('error').hidden = !e;
+  if (e) window.scrollTo(0, 0);
+}
+
+// ---------------------------------------------------------------- start
+
+google.script.url.getLocation(function (loc) {
+  KEY = loc.parameter.owner;
+  load();
+});
+
+function load() {
+  call('ownerBootstrap', KEY).then(function (b) {
+    boot = b;
+    $('sName').value = b.ownerName || '';
+    $('sMembers').value = (b.defaultMembers || []).join(', ');
+    $('sUrl').value = '';
+    $('sState').textContent = 'Gemini: ' + (b.geminiReady ? 'saved' : 'not set') + ' · Splitwise: ' +
+      (b.splitwiseReady ? (b.splitwiseError ? 'problem: ' + b.splitwiseError : 'connected' + (b.me ? ' as ' + b.me.name : '')) : 'not set');
+    if (!b.geminiReady || !b.ownerName) $('settings').hidden = false;
+    renderBills();
+  }).catch(showError);
+}
+
+$('settingsBtn').onclick = function () { $('settings').hidden = !$('settings').hidden; };
+$('saveSettings').onclick = function () {
+  var btn = this; btn.disabled = true;
+  call('saveSettings', KEY, { ownerName: $('sName').value, geminiKey: $('sGemini').value, splitwiseKey: $('sSplitwise').value, defaultMembers: $('sMembers').value, appUrl: $('sUrl').value })
+    .then(function (b) { boot = b; $('sGemini').value = ''; $('sSplitwise').value = ''; showError(null); $('settings').hidden = true; load(); })
+    .catch(showError)
+    .then(function () { btn.disabled = false; });
+};
+
+// ---------------------------------------------------------------- scan and review
+
+function downscale(file) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image();
+    img.onload = function () {
+      var max = 1600, s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      var c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = function () { reject(new Error('Couldn\'t open that photo. Try a JPEG or PNG.')); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+$('photo').onchange = function () {
+  var file = this.files && this.files[0];
+  if (!file) return;
+  showError(null);
+  $('scanStatus').hidden = false;
+  $('scanStatus').innerHTML = '<span class="spin"></span> Reading the receipt…';
+  downscale(file).then(function (dataUrl) {
+    $('thumb').src = dataUrl; $('thumb').hidden = false;
+    return call('scanReceipt', KEY, dataUrl.split(',')[1], 'image/jpeg');
+  }).then(function (r) {
+    $('scanStatus').textContent = 'Found ' + r.items.length + ' items. Fix anything that looks wrong.';
+    receiptTotal = r.total || 0;
+    openReview(r.merchant, r.items, r.tax, r.tip);
+    $('warnings').innerHTML = r.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('');
+    $('warnings').hidden = !r.warnings.length;
+  }).catch(function (e) {
+    $('scanStatus').hidden = true;
+    showError(e);
+  });
+  this.value = '';
+};
+
+$('manual').onclick = function () { receiptTotal = 0; openReview('', [{ name: '', price: 0 }, { name: '', price: 0 }], 0, 0); };
+
+function itemRow(name, cents) {
+  var row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<input class="name" placeholder="Item" aria-label="Item"><input class="price num" inputmode="decimal" placeholder="0.00" aria-label="Price"><button aria-label="Remove">×</button>';
+  row.querySelector('.name').value = name || '';
+  row.querySelector('.price').value = cents ? (cents / 100).toFixed(2) : '';
+  row.querySelector('button').onclick = function () { row.remove(); recalc(); };
+  row.querySelectorAll('input').forEach(function (i) { i.oninput = recalc; });
+  return row;
+}
+
+function openReview(title, items, tax, tip) {
+  $('review').hidden = false;
+  $('created').hidden = true;
+  $('title').value = title || '';
+  $('items').innerHTML = '';
+  items.forEach(function (it) { $('items').appendChild(itemRow(it.name, it.price)); });
+  $('tax').value = tax ? (tax / 100).toFixed(2) : '';
+  $('tip').value = tip ? (tip / 100).toFixed(2) : '';
+  setupPeople();
+  recalc();
+}
+
+$('addItem').onclick = function () { $('items').appendChild(itemRow('', 0)); $('items').lastChild.querySelector('.name').focus(); };
+$('tax').oninput = recalc; $('tip').oninput = recalc;
+
+function readItems() {
+  var out = [], bad = false;
+  $('items').querySelectorAll('.row').forEach(function (row) {
+    var name = row.querySelector('.name').value.trim();
+    var raw = row.querySelector('.price').value;
+    if (!name && !raw.trim()) return;
+    var c = parseMoney(raw);
+    if (!name || c === null) bad = true;
+    out.push({ name: name, price: c || 0 });
+  });
+  return { items: out, bad: bad };
+}
+
+function recalc() {
+  var r = readItems(), tax = parseMoney($('tax').value), tip = parseMoney($('tip').value);
+  var total = r.items.reduce(function (s, it) { return s + it.price; }, 0) + (tax || 0) + (tip || 0);
+  $('total').textContent = usd(total);
+  var note = '';
+  if (r.bad) note = 'Every item needs a name and a price.';
+  else if (tax === null || tip === null) note = 'Check the tax and tip.';
+  else if (receiptTotal && total !== receiptTotal) note = 'The receipt says ' + usd(receiptTotal) + '. Off by ' + usd(Math.abs(total - receiptTotal)) + '.';
+  else if (receiptTotal) note = 'Matches the receipt total.';
+  $('totalCheck').textContent = note;
+  $('totalCheck').className = r.bad || (receiptTotal && total !== receiptTotal) ? 'warn' : 'fine';
+  $('totalCheck').hidden = !note;
+  $('create').disabled = r.bad || !r.items.length || tax === null || tip === null || !people.some(function (p) { return p.on; });
+}
+
+// ---------------------------------------------------------------- who's in
+
+function setupPeople() {
+  var groups = (boot && boot.groups) || [];
+  $('groupField').hidden = !groups.length;
+  if (groups.length) {
+    $('group').innerHTML = groups.map(function (g) { return '<option value="' + g.id + '">' + esc(g.name) + '</option>'; }).join('');
+    if (boot.groupId && groups.some(function (g) { return String(g.id) === String(boot.groupId); })) $('group').value = boot.groupId;
+    pickGroup();
+  } else {
+    var names = [boot && boot.ownerName || 'Me'].concat((boot && boot.defaultMembers) || []);
+    people = names.map(function (n) { return { name: n, splitwiseId: null, on: true }; });
+    renderPeople();
+  }
+}
+
+function pickGroup() {
+  var g = boot.groups.filter(function (x) { return String(x.id) === $('group').value; })[0];
+  people = (g ? g.members : []).map(function (m) { return { name: m.name, splitwiseId: m.splitwiseId, on: true }; });
+  renderPeople();
+}
+$('group').onchange = pickGroup;
+
+function renderPeople() {
+  $('members').innerHTML = '';
+  people.forEach(function (p, i) {
+    var l = document.createElement('label');
+    l.className = 'check';
+    l.innerHTML = '<input type="checkbox"><span>' + esc(p.name) + (p.splitwiseId ? '' : ' <span class="fine">(not in Splitwise)</span>') + '</span>';
+    l.querySelector('input').checked = p.on;
+    l.querySelector('input').onchange = function () { p.on = this.checked; renderPayer(); recalc(); };
+    $('members').appendChild(l);
+  });
+  renderPayer();
+  recalc();
+}
+
+function renderPayer() {
+  var current = $('payer').value;
+  var on = people.filter(function (p) { return p.on; });
+  $('payer').innerHTML = on.map(function (p, i) { return '<option value="' + i + '">' + esc(p.name) + '</option>'; }).join('');
+  var meId = boot && boot.me && boot.me.splitwiseId;
+  var idx = on.findIndex(function (p) { return meId ? p.splitwiseId === meId : p.name === (boot && boot.ownerName); });
+  if (current && Number(current) < on.length && $('payer').dataset.touched) $('payer').value = current;
+  else if (idx >= 0) $('payer').value = String(idx);
+}
+$('payer').onchange = function () { this.dataset.touched = '1'; };
+
+$('addPerson').onclick = function () {
+  var n = $('extraName').value.trim();
+  if (!n) return;
+  people.push({ name: n, splitwiseId: null, on: true });
+  $('extraName').value = '';
+  renderPeople();
+};
+
+// ---------------------------------------------------------------- create and share
+
+$('create').onclick = function () {
+  var btn = this, r = readItems();
+  var on = people.filter(function (p) { return p.on; });
+  var g = boot.groups && boot.groups.filter(function (x) { return String(x.id) === $('group').value; })[0];
+  btn.disabled = true; btn.textContent = 'Creating the sheet…';
+  showError(null);
+  call('createBill', KEY, {
+    title: $('title').value.trim() || 'Bill',
+    currency: 'USD',
+    items: r.items,
+    tax: parseMoney($('tax').value) || 0,
+    tip: parseMoney($('tip').value) || 0,
+    members: on.map(function (p) { return { name: p.name, splitwiseId: p.splitwiseId }; }),
+    payerIndex: Number($('payer').value) || 0,
+    groupId: g && !$('groupField').hidden ? g.id : null,
+    groupName: g && !$('groupField').hidden ? g.name : null
+  }).then(function (res) {
+    $('review').hidden = true;
+    $('created').hidden = false;
+    $('shareWa').href = res.whatsappUrl;
+    $('openSheet').href = res.sheetUrl;
+    $('linkBox').value = res.guestUrl;
+    if (!res.linkSharing) showError('The sheet was created, but your Google account doesn\'t allow link sharing. Roommates can still use the page link.');
+    load();
+  }).catch(showError).then(function () { btn.disabled = false; btn.textContent = 'Create the sheet'; });
+};
+
+$('copyLink').onclick = function () {
+  var box = $('linkBox'), btn = this;
+  var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy roommates\' link'; }, 2000); };
+  if (navigator.clipboard) navigator.clipboard.writeText(box.value).then(done, function () { box.hidden = false; box.select(); });
+  else { box.hidden = false; box.select(); }
+};
+$('another').onclick = function () { $('created').hidden = true; $('scanStatus').hidden = true; $('warnings').hidden = true; $('thumb').hidden = true; window.scrollTo(0, 0); };
+
+// ---------------------------------------------------------------- your bills
+
+function renderBills() {
+  var list = (boot && boot.bills) || [];
+  $('noBills').hidden = list.length > 0;
+  $('bills').innerHTML = '';
+  list.slice(0, 8).forEach(function (b) {
+    var el = document.createElement('div');
+    el.className = 'bill';
+    el.innerHTML = '<div class="bill-head"><strong>' + esc(b.title) + '</strong><span class="fine">' + esc(b.createdAt.slice(0, 10)) + '</span></div><p class="muted"><span class="spin"></span></p>';
+    $('bills').appendChild(el);
+    call('billStatus', KEY, b.id).then(function (s) { fillBill(el, s); }).catch(function (e) {
+      el.querySelector('p').textContent = e.message;
+    });
+  });
+}
+
+function fillBill(el, s) {
+  var done = s.members.filter(function (m) { return m.done || m.isPayer; }).length;
+  var rows = s.members.map(function (m) {
+    var tag = m.isPayer ? '<span class="tag">paid</span>' : m.done ? '<span class="tag done">Done</span>' : '<span class="tag">waiting</span>';
+    return '<li><span>' + esc(m.name) + ' ' + tag + '</span><span class="num">' + usd(m.total) + '</span></li>';
+  }).join('');
+  el.innerHTML =
+    '<div class="bill-head"><strong>' + esc(s.title) + '</strong><span class="num">' + usd(s.total) + '</span></div>' +
+    '<p class="fine">' + done + ' of ' + s.members.length + ' done' + (s.unclaimed.length ? ' · ' + s.unclaimed.length + ' item(s) nobody kept, on ' + esc(s.ownerName) : '') + '</p>' +
+    '<ul class="people">' + rows + '</ul>' +
+    '<div class="two">' +
+      '<a class="btn small" target="_blank" rel="noopener" href="' + esc(s.sheetUrl) + '">Open sheet</a>' +
+      (s.locked ? '<a class="btn small" target="_blank" rel="noopener" href="https://secure.splitwise.com/#/groups/' + esc(s.groupId) + '">In Splitwise ✓</a>'
+        : '<a class="btn small" target="_blank" rel="noopener" href="' + esc(s.whatsappUrl) + '">Share again</a>') +
+    '</div>' +
+    (s.locked ? '' : s.groupId ? '<button class="primary wide add">Add to Splitwise</button>' : '<p class="fine">Not from a Splitwise group, so there\'s nothing to add it to.</p>') +
+    '<p class="warn msg" hidden></p>';
+  var add = el.querySelector('.add');
+  if (add) add.onclick = function () {
+    var pending = s.members.filter(function (m) { return !m.done && !m.isPayer; }).map(function (m) { return m.name; });
+    if (pending.length && !confirm(pending.join(', ') + (pending.length === 1 ? ' hasn\'t' : ' haven\'t') + ' tapped Done. Add it to Splitwise anyway?')) return;
+    add.disabled = true; add.textContent = 'Adding…';
+    call('addToSplitwise', KEY, s.sheetId).then(function (s2) { fillBill(el, s2); }).catch(function (e) {
+      add.disabled = false; add.textContent = 'Add to Splitwise';
+      var m = el.querySelector('.msg'); m.textContent = e.message; m.hidden = false;
+    });
+  };
+}
+
+$('refresh').onclick = function () { load(); };
+</script>
+</body>
+</html>
