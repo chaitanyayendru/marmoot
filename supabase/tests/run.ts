@@ -785,6 +785,28 @@ describe('shared groups', () => {
     assert.equal((await as(userA, (q) => q('select members from my_groups() where id = $1', [id]))).rows[0].members, 1);
   });
 
+  test('deleting: a bill sheet only with its owner link; a group for everyone only by its creator', async (t) => {
+    if (!url) return t.skip();
+    const sheet = await costcoSheet();
+    await assert.rejects(anon('select delete_bill_sheet($1)', [sheet.hima]), /Only the person who shared/);
+    await anon('select delete_bill_sheet($1)', [sheet.chai]);
+    await assert.rejects(view(sheet.hima), /./, 'links stop working');
+    assert.equal((await db.query('select count(*)::int as n from bill_items where sheet_id = $1', [sheet.sheet_id])).rows[0].n, 0);
+
+    const id = await newGroup();
+    // removeSheet can now be shared.
+    await as(userA, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev(`rm-${randomUUID()}`, { type: 'removeSheet', group: id, sheet: 's1' })])]));
+    const token = await as(userA, async (q) => (await q('select group_invite($1) as t', [id])).rows[0].t as string);
+    await as(userB, (q) => q('select request_to_join($1, $2)', [token, 'Ben']));
+    const req = (await as(userA, async (q) => (await q('select * from group_join_requests($1)', [id])).rows))[0];
+    await as(userA, (q) => q('select decide_join_request($1, true)', [req.id]));
+    await assert.rejects(as(userB, (q) => q('select delete_shared_group($1)', [id])), /Only the person who created/);
+    await assert.rejects(asRole('anon', (q) => q('select delete_shared_group($1)', [id])), /permission denied/);
+    await as(userA, (q) => q('select delete_shared_group($1)', [id]));
+    assert.equal((await as(userB, (q) => q('select * from my_groups() where id = $1', [id]))).rows.length, 0);
+    assert.equal((await db.query('select count(*)::int as n from group_events where group_id = $1', [id])).rows[0].n, 0);
+  });
+
   test('shared-group tables are closed to the API', async (t) => {
     if (!url) return t.skip();
     for (const table of ['group_events', 'group_invites', 'join_requests']) {

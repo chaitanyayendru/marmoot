@@ -9,7 +9,9 @@ Everything here is free. It takes about 15 minutes, once. You need the [free set
 1. In Supabase, open **SQL Editor → New query**.
 2. Open `supabase\migrations\20261113000000_shared_groups.sql` from the repo in Notepad, copy all of it, paste it in, and click **Run**.
 
-If you never ran `supabase\setup.sql`, run that instead. It already includes this part.
+3. Do the same with `supabase\migrations\20261113010000_deleting.sql` (deleting bills, and deleting a group for everyone).
+
+If you never ran `supabase\setup.sql`, run that instead. It already includes both.
 
 ## 2. Make a Google sign-in client
 
@@ -42,7 +44,7 @@ If you never ran `supabase\setup.sql`, run that instead. It already includes thi
 - **Who can see what:** a group's expenses can be read only by people who have joined it. The tables are closed, and every read and write goes through database functions that check you're in the group.
 - **Anyone in a group can add, change and delete its expenses,** like in Splitwise. Each change is kept in order, and nothing is ever overwritten.
 - **Offline:** changes you make offline show at once and are sent when you're back online.
-- **Leaving:** People → **Leave this group** takes it off your phones. Your past expenses stay in it for everyone else.
+- **Deleting:** tap an expense or payment to see who owes what and to delete it. A split-by-item bill has **Delete this bill** at the bottom. In **People & settings**, whoever created a group can **Delete this group for everyone**; anyone can **Leave this group**, which takes it off their phones and keeps their past expenses in it for everyone else.
 - **Signing out** takes shared groups off that phone. Sign back in to get them back.
 - **Google's sign-in screen mentions `crayupizosflqzzweteb.supabase.co`.** That's expected: it's the address of your Supabase project.
 - **Bill sheets and the receipt scanner work as before.** Roommates still don't need an account just to tick their items on a bill.

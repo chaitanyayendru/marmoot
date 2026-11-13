@@ -16,6 +16,7 @@ import {
   type ExpenseItem,
   type Group,
   type Item,
+  type PaymentItem,
 } from '../model.ts';
 import { api } from '../apiClient.ts';
 import { BalanceChart } from './Chart.tsx';
@@ -34,6 +35,7 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
   const [startingGame, setStartingGame] = useState(false);
   const [added, setAdded] = useState<ExpenseItem | null>(null);
   const [dueAmounts, setDueAmounts] = useState<Record<string, string>>({});
+  const [openItem, setOpenItem] = useState<ExpenseItem | PaymentItem | null>(null);
   const nets = useMemo(() => groupNets(group), [group]);
   const mine = nets.get(group.me) ?? 0;
   const history = useMemo(() => balanceHistory(group), [group]);
@@ -122,7 +124,7 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
           <Spade size={16} /> Game night
         </button>
         <a className="pill" href={`#/g/${group.id}/people`}>
-          <Users size={16} /> People
+          <Users size={16} /> People & settings
         </a>
       </div>
 
@@ -137,7 +139,8 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
                 const effect = itemNets(i).get(group.me) ?? 0;
                 if (i.kind === 'expense') {
                   return (
-                    <li key={i.id} className="list-row">
+                    <li key={i.id}>
+                     <button className="list-row as-button" onClick={() => setOpenItem(i)}>
                       <CategoryIcon category={i.category} />
                       <span className="row-main">
                         <span className="row-title">{i.description || categoryLabel(i.category)}</span>
@@ -150,18 +153,21 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
                         {effect === 0 ? <span className="row-sub">not involved</span> : <Signed cents={effect} />}
                         {effect !== 0 && <span className="row-sub">{effect > 0 ? 'you lent' : 'your share'}</span>}
                       </span>
+                     </button>
                     </li>
                   );
                 }
                 if (i.kind === 'payment') {
                   return (
-                    <li key={i.id} className="list-row">
+                    <li key={i.id}>
+                     <button className="list-row as-button" onClick={() => setOpenItem(i)}>
                       <span className="cat" aria-hidden="true"><ArrowLeftRight size={18} strokeWidth={1.75} /></span>
                       <span className="row-main">
                         <span className="row-title">{name(i.from)} paid {i.to === group.me ? 'you' : name(i.to)}</span>
                         <span className="row-sub">{usd(i.amount)}, {shortDate(i.date)}</span>
                       </span>
                       <span className="row-end">{effect !== 0 && <Signed cents={effect} />}</span>
+                     </button>
                     </li>
                   );
                 }
@@ -203,6 +209,18 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
             ))}
           </ul>
         </section>
+      )}
+
+      {openItem && (
+        <ItemDetails
+          group={group}
+          item={openItem}
+          onClose={() => setOpenItem(null)}
+          onDelete={() => {
+            dispatch({ type: 'deleteItem', group: group.id, item: openItem.id });
+            setOpenItem(null);
+          }}
+        />
       )}
 
       {added && (
@@ -291,6 +309,56 @@ function StartGame({ group, onClose, onStart }: { group: Group; onClose: () => v
         </label>
         <button className="pill primary wide" disabled={!cents || players.length < 2}>Start</button>
       </form>
+    </Sheet>
+  );
+}
+
+/** An expense or payment: who paid, each person's share, and deleting it. */
+function ItemDetails({ group, item, onClose, onDelete }: { group: Group; item: ExpenseItem | PaymentItem; onClose: () => void; onDelete: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const who = (id: string) => (id === group.me ? 'You' : group.members.find((m) => m.id === id)?.name ?? 'Someone');
+  const nets = itemNets(item);
+  const fromSheet = item.kind === 'expense' && (group.sheets ?? []).some((sh) => sh.expenseId === item.id);
+  const title = item.kind === 'expense' ? item.description || categoryLabel(item.category) : `${who(item.from)} paid ${item.to === group.me ? 'you' : who(item.to)}`;
+  return (
+    <Sheet title={title} onClose={onClose}>
+      <div className="stack">
+        <p className="detail-amount num">{usd(item.amount)}</p>
+        <p className="muted">
+          {item.kind === 'expense' ? `${who(item.paidBy)} paid, ${shortDate(item.date)}` : `${shortDate(item.date)}${item.rail ? `, by ${item.rail === 'cash' ? 'cash' : item.rail}` : ''}`}
+          {item.kind === 'expense' && item.recurringId ? '. Repeats.' : ''}
+          {fromSheet ? '. From a split-by-item bill.' : ''}
+        </p>
+        {item.kind === 'expense' && (
+          <ul className="list compact">
+            {group.members
+              .map((m) => ({ m, share: (item.paidBy === m.id ? item.amount : 0) - (nets.get(m.id) ?? 0) }))
+              .filter(({ share }) => share !== 0)
+              .map(({ m, share }) => (
+                <li key={m.id} className="list-row">
+                  <span className="row-main"><span className="row-title">{who(m.id)}</span></span>
+                  <span className="row-end num">{usd(share)}</span>
+                </li>
+              ))}
+          </ul>
+        )}
+        {confirm ? (
+          <div className="confirm">
+            <p>
+              Delete this {item.kind === 'expense' ? 'expense' : 'payment'}? Balances change for everyone in {group.name}
+              {item.kind === 'expense' && item.recurringId ? '. The repeating bill keeps going; stop it under Repeating bills.' : '.'}
+            </p>
+            <div className="two">
+              <button className="pill" onClick={() => setConfirm(false)}>Keep it</button>
+              <button className="pill danger" onClick={onDelete}><Trash2 size={16} /> Delete</button>
+            </div>
+          </div>
+        ) : (
+          <button className="pill danger wide" onClick={() => setConfirm(true)}>
+            <Trash2 size={16} /> Delete {item.kind === 'expense' ? 'expense' : 'payment'}
+          </button>
+        )}
+      </div>
     </Sheet>
   );
 }

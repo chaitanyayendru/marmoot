@@ -500,3 +500,5 @@ input.switch:disabled { opacity: 0.5; cursor: default; }
 .request p { margin: 0; }
 button.link { display: inline-flex; align-items: center; gap: 0.35rem; }
 code.copy-block { display: block; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.detail-amount { margin: 0; font-size: 2rem; font-weight: 650; letter-spacing: -0.02em; }
+.list.compact .list-row { min-height: 44px; padding: 0.45rem 0; }

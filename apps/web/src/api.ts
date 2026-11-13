@@ -188,6 +188,8 @@ export function createApi(
       rpc<{ id: string; name: string; token: string }>('add_bill_person', { p_owner_token: owner, p_name: name, p_phone: phone ?? null }),
     setPhone: (owner: string, person: string, phone: string | null) => rpc('set_bill_person_phone', { p_owner_token: owner, p_person: person, p_phone: phone }),
     close: (owner: string, close = true) => rpc('close_bill_sheet', { p_owner_token: owner, p_close: close }),
+    /** Gone for everyone: every person's link stops working. */
+    deleteSheet: (owner: string) => rpc('delete_bill_sheet', { p_owner_token: owner }),
     /** Marmoot's WhatsApp number messages everyone not yet messaged (or the people listed). */
     sendAlerts: (owner: string, people?: string[], resend = false) =>
       call<SendResult>('/functions/v1/send-bill-alerts', { owner_token: owner, people: people ?? null, resend }),
@@ -199,6 +201,7 @@ export function createApi(
     appendEvents: (group: string, events: { client_id: string; action: Action }[]) => rpc<number>('append_group_events', { p_group: group, p_events: events }),
     eventsSince: (group: string, after: number, limit = 500) => rpc<GroupEvent[]>('group_events_since', { p_group: group, p_after: after, p_limit: limit }),
     leaveGroup: (group: string) => rpc('leave_group', { p_group: group }),
+    deleteSharedGroup: (group: string) => rpc('delete_shared_group', { p_group: group }),
     groupInvite: (group: string, inviter: string, reset = false) => rpc<string>('group_invite', { p_group: group, p_inviter: inviter, p_reset: reset }),
     inviteInfo: (token: string) => rpc<InviteInfo>('invite_info', { p_token: token }),
     requestToJoin: (token: string, name: string) => rpc<{ group_id: string; status: InviteInfo['status'] }>('request_to_join', { p_token: token, p_name: name }),

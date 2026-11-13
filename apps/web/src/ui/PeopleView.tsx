@@ -3,7 +3,8 @@ import { ChevronLeft, Plus } from 'lucide-react';
 import { go } from '../App.tsx';
 import { APP_NAMES, memberInUse, newMember, railsFor, type Action, type Group, type Member, type PayApp } from '../model.ts';
 import { waNumber } from '../whatsapp.ts';
-import { NotSaving, Sheet } from './bits.tsx';
+import { useAccount } from '../account.tsx';
+import { Notice, NotSaving, Sheet } from './bits.tsx';
 
 const FIELDS: { app: PayApp; label: string; placeholder: string }[] = [
   { app: 'venmo', label: 'Venmo username', placeholder: '@username' },
@@ -16,7 +17,21 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
   const [editing, setEditing] = useState<Member | null>(null);
   const [newName, setNewName] = useState('');
   const [groupName, setGroupName] = useState(group.name);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<false | 'leave' | 'everyone'>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const account = useAccount();
+  const creator = !!group.shared && !!account.owner[group.id];
+
+  async function deleteForEveryone() {
+    if (!account.sync) return;
+    setDeleteError(null);
+    try {
+      await account.sync.destroy(group.id);
+      go('/');
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Could not delete the group.');
+    }
+  }
 
   function add(e: FormEvent) {
     e.preventDefault();
@@ -33,7 +48,7 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
         <a className="back" href={`#/g/${group.id}`}><ChevronLeft size={22} /> {group.name}</a>
       </header>
       {!saved && <NotSaving />}
-      <h1>People</h1>
+      <h1>People & settings</h1>
       <p className="fine">A WhatsApp number lets reminders go straight to that person. Payment apps decide who can pay whom.</p>
 
       <ul className="list">
@@ -67,7 +82,16 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
           <span>Group name</span>
           <input value={groupName} onChange={(e) => setGroupName(e.target.value)} onBlur={() => dispatch({ type: 'renameGroup', group: group.id, name: groupName })} />
         </label>
-        {confirmDelete ? (
+        {deleteError && <Notice tone="warn">{deleteError}</Notice>}
+        {confirmDelete === 'everyone' ? (
+          <div className="confirm">
+            <p>Delete {group.name} for everyone? Its expenses, balances and history are gone from every phone. This can’t be undone.</p>
+            <div className="two">
+              <button className="pill" onClick={() => setConfirmDelete(false)}>Keep it</button>
+              <button className="pill danger" onClick={() => void deleteForEveryone()}>Delete for everyone</button>
+            </div>
+          </div>
+        ) : confirmDelete === 'leave' ? (
           <div className="confirm">
             <p>
               {group.shared
@@ -75,12 +99,16 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
                 : `Delete ${group.name} and everything in it from this device?`}
             </p>
             <div className="two">
-              <button className="pill danger" onClick={() => { dispatch({ type: 'deleteGroup', group: group.id }); go('/'); }}>{group.shared ? 'Leave group' : 'Delete group'}</button>
               <button className="pill" onClick={() => setConfirmDelete(false)}>{group.shared ? 'Stay' : 'Keep it'}</button>
+              <button className="pill danger" onClick={() => { dispatch({ type: 'deleteGroup', group: group.id }); go('/'); }}>{group.shared ? 'Leave group' : 'Delete group'}</button>
             </div>
           </div>
         ) : (
-          <button className="link danger" onClick={() => setConfirmDelete(true)}>{group.shared ? 'Leave this group' : 'Delete this group'}</button>
+          <div className="stack tight">
+            {creator && <button className="link danger" onClick={() => setConfirmDelete('everyone')}>Delete this group for everyone</button>}
+            <button className="link danger" onClick={() => setConfirmDelete('leave')}>{group.shared ? 'Leave this group' : 'Delete this group'}</button>
+            {group.shared && !creator && <p className="fine">Only the person who created {group.name} can delete it for everyone.</p>}
+          </div>
         )}
       </section>
 

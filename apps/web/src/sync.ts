@@ -74,8 +74,8 @@ export interface SyncEvents {
   onGroups: (groups: Group[], removed: string[]) => void;
   /** A change the server refused, or why syncing stopped. */
   onError?: (message: string) => void;
-  /** Per group: how many people are waiting to be let in. */
-  onRequests?: (counts: Record<string, number>) => void;
+  /** The server's list of your groups: your role in each, and how many people are waiting to be let in. */
+  onRows?: (rows: GroupRow[]) => void;
 }
 
 export class GroupSync {
@@ -269,7 +269,7 @@ export class GroupSync {
       this.save();
       this.emit([], gone);
     }
-    this.events.onRequests?.(Object.fromEntries(rows.map((r) => [r.id, r.pending_requests])));
+    this.events.onRows?.(rows);
     const work: Promise<void>[] = [];
     for (const r of rows) {
       const log = (this.store.logs[r.id] ??= { base: null, seq: 0, pending: [] });
@@ -286,6 +286,12 @@ export class GroupSync {
   /** Stop sharing this group with you. Your past expenses stay in it for everyone else. */
   async leave(group: string) {
     await this.api.leaveGroup(group);
+    this.drop(group);
+  }
+
+  /** Delete the group for everyone in it (only its creator may). */
+  async destroy(group: string) {
+    await this.api.deleteSharedGroup(group);
     this.drop(group);
   }
 

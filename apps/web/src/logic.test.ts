@@ -164,6 +164,21 @@ describe('one-tap WhatsApp', () => {
   });
 });
 
+describe('deleting', () => {
+  it('a deleted bill sheet comes off the group, with the expense it added', () => {
+    const g: Group = { ...flat(), sheets: [
+      { id: 's1', ownerToken: 't', title: 'Costco', category: 'groceries', date: '2026-11-13', createdAt: 1, people: [], expenseId: 'x1' },
+      { id: 's2', ownerToken: 't2', title: 'Kroger', category: 'groceries', date: '2026-11-13', createdAt: 1, people: [] },
+    ], items: [{ kind: 'expense', id: 'x1', at: 1, date: '2026-11-13', description: 'Costco', category: 'groceries', amount: 900, paidBy: 'you', split: { method: 'equal', among: ['you', 'ravi'] } }] };
+    let s: State = { groups: [g], theme: 'system' };
+    s = reducer(s, { type: 'removeSheet', group: g.id, sheet: 's1' });
+    expect(s.groups[0]!.sheets!.map((x) => x.id)).toEqual(['s2']);
+    expect(s.groups[0]!.items).toEqual([]);
+    s = reducer(s, { type: 'removeSheet', group: g.id, sheet: 's2' });
+    expect(s.groups[0]!.sheets).toEqual([]);
+  });
+});
+
 describe('receipt scanning', () => {
   const answer = (obj: unknown) => ({ candidates: [{ content: { parts: [{ text: '```json\n' + JSON.stringify(obj) + '\n```' }] } }] });
 

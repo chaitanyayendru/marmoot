@@ -20,6 +20,8 @@ export interface Account {
   sync: GroupSync | null;
   /** Per shared group: people waiting to be let in. */
   requests: Record<string, number>;
+  /** Per shared group: whether you created it (and so can delete it for everyone). */
+  owner: Record<string, boolean>;
   /** Groups on this phone are moving to the account. */
   moving: boolean;
   message: string | null;
@@ -48,6 +50,7 @@ export function AccountProvider({ state, dispatch, children }: { state: State; d
   const userId = session?.user.id ?? null;
   const name = displayName(session?.user);
   const [requests, setRequests] = useState<Record<string, number>>({});
+  const [owner, setOwner] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState<string | null>(error);
   const [moving, setMoving] = useState(false);
   const stateRef = useRef(state);
@@ -63,7 +66,10 @@ export function AccountProvider({ state, dispatch, children }: { state: State; d
         if (removed.length) dispatch({ type: 'dropGroups', ids: removed });
       },
       onError: (m) => setMessage(m),
-      onRequests: setRequests,
+      onRows: (rows) => {
+        setRequests(Object.fromEntries(rows.map((r) => [r.id, r.pending_requests])));
+        setOwner(Object.fromEntries(rows.map((r) => [r.id, r.role === 'owner'])));
+      },
     });
   }, [userId, dispatch]);
 
@@ -134,6 +140,7 @@ export function AccountProvider({ state, dispatch, children }: { state: State; d
     name,
     sync,
     requests,
+    owner,
     moving,
     message,
     signIn: async (then) => {
@@ -147,6 +154,7 @@ export function AccountProvider({ state, dispatch, children }: { state: State; d
       await signOut();
       dispatch({ type: 'dropGroups', ids: shared });
       setRequests({});
+      setOwner({});
     },
     refresh: async () => {
       if (!sync) return;

@@ -58,6 +58,12 @@ class FakeServer {
         need(group);
         return structuredClone(this.logs.get(group)!.filter((e) => e.seq > after).slice(0, limit));
       },
+      deleteSharedGroup: async (group) => {
+        need(group);
+        this.members.delete(group);
+        this.logs.delete(group);
+        return null;
+      },
       leaveGroup: async (group) => {
         this.members.get(group)?.delete(user);
         return null;
@@ -206,6 +212,19 @@ describe('shared groups', () => {
     server.members.get('g1')!.delete(chaiId);
     await chai.sync.refresh();
     expect(chai.shown.has('g1')).toBe(false);
+  });
+
+  it('deleting a group for everyone takes it off every phone', async () => {
+    const server = new FakeServer();
+    const chai = phone(server, chaiId);
+    await chai.sync.create(flat(), 'Chai');
+    server.join('g1', ashaId, 'm-asha');
+    const asha = phone(server, ashaId);
+    await asha.sync.refresh();
+    await chai.sync.destroy('g1');
+    expect(chai.shown.has('g1')).toBe(false);
+    await asha.sync.refresh();
+    expect(asha.shown.has('g1')).toBe(false);
   });
 
   it('the view puts your pending changes on top of what the server has', () => {

@@ -234,6 +234,8 @@ export type Action =
   | { type: 'updateGame'; group: string; game: string; update: GameUpdate }
   | { type: 'addSheet'; group: string; sheet: SheetRef }
   | { type: 'closeSheet'; group: string; sheet: string; expense: ExpenseItem }
+  /** A deleted bill sheet comes off the list, with the expense it added if it was closed. */
+  | { type: 'removeSheet'; group: string; sheet: string }
   // From the server, never sent back: shared groups as they now stand, and ones you've left.
   | { type: 'putGroups'; groups: Group[] }
   | { type: 'dropGroups'; ids: string[] };
@@ -353,6 +355,15 @@ export function reducer(s: State, a: Action): State {
         items: g.items.some((i) => i.id === a.expense.id) ? g.items : [...g.items, a.expense],
         sheets: (g.sheets ?? []).map((sh) => (sh.id === a.sheet ? { ...sh, expenseId: a.expense.id } : sh)),
       }));
+    case 'removeSheet':
+      return mapGroup(s, a.group, (g) => {
+        const sheet = (g.sheets ?? []).find((sh) => sh.id === a.sheet);
+        return {
+          ...g,
+          items: sheet?.expenseId ? g.items.filter((i) => i.id !== sheet.expenseId) : g.items,
+          sheets: (g.sheets ?? []).filter((sh) => sh.id !== a.sheet),
+        };
+      });
     case 'addRecurring':
       return mapGroup(s, a.group, (g) => ({ ...g, recurring: [...g.recurring, a.recurring] }));
     case 'deleteRecurring':

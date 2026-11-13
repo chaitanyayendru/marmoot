@@ -27,6 +27,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
   const [newPrice, setNewPrice] = useState('');
   const [closing, setClosing] = useState(false);
   const [copiedText, setCopiedText] = useState<'group' | 'splitwise' | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [showText, setShowText] = useState<string | null>(null);
 
   const totals = useMemo(() => (data ? sheetTotals(data) : null), [data]);
@@ -37,6 +38,11 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
       <main className="page">
         <header className="topbar"><a className="back" href={`#/g/${group.id}`}><ChevronLeft size={22} /> {group.name}</a></header>
         {error ? <Notice tone="warn">{error}</Notice> : <p className="muted">Loading the bill…</p>}
+        {error && /deleted|not valid|isn.t valid|not found|no longer/i.test(error) && (
+          <button className="pill wide" onClick={() => { dispatch({ type: 'removeSheet', group: group.id, sheet: sheetRef.id }); go(`/g/${group.id}`); }}>
+            Take it off {group.name}
+          </button>
+        )}
       </main>
     );
   }
@@ -96,6 +102,21 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
       setNewName('');
       setNewPrice('');
     }
+  }
+
+  /** Gone for everyone: links stop working, and the expense it added (if closed) comes off the group. */
+  async function deleteBill() {
+    try {
+      await api.deleteSheet(token);
+    } catch (e) {
+      // Already deleted from another phone: carry on and take it off the list.
+      if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) {
+        setError(e instanceof Error ? e.message : 'Could not delete the bill.');
+        return;
+      }
+    }
+    dispatch({ type: 'removeSheet', group: group.id, sheet: sheetRef.id });
+    go(`/g/${group.id}`);
   }
 
   async function closeIntoGroup() {
@@ -309,6 +330,23 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
           )}
         </section>
       )}
+
+      <section className="stack tight danger-zone" aria-label="Delete this bill">
+        {deleting ? (
+          <div className="confirm">
+            <p>
+              Delete {data.sheet.title}? Everyone’s links stop working
+              {sheetRef.expenseId ? `, and its ${usd(totals.total)} expense comes off ${group.name}` : ''}. This can’t be undone.
+            </p>
+            <div className="two">
+              <button className="pill" onClick={() => setDeleting(false)}>Keep it</button>
+              <button className="pill danger" onClick={() => void deleteBill()}><Trash2 size={16} /> Delete bill</button>
+            </div>
+          </div>
+        ) : (
+          <button className="link danger" onClick={() => setDeleting(true)}>Delete this bill</button>
+        )}
+      </section>
 
       {showText && (
         <Sheet title="Copy this" onClose={() => setShowText(null)}>
