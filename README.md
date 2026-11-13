@@ -4,8 +4,6 @@ Split the bills you share (groceries, rent, utilities, trips, dinners, game nigh
 
 For a shop with many items, make a **bill sheet**: scan the receipt, then post one WhatsApp message in your group with each person's own link. Each person unticks what they weren't part of (tomatoes yes, onions no). You see who's answered, and the totals land in the group when you close it, ready to copy into Splitwise as exact amounts.
 
-**Architecture plan:** [Marmoot — Architecture Plan](https://claude.ai/artifact/SSLhp5ZqqQxMoLDa9Hd8Bz)
-
 ## What's here
 
 | Path | What it is |
