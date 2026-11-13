@@ -4,9 +4,11 @@
  * same code runs in the app and in the end-to-end test under Node.
  *
  * Bill sheets need no account: every call carries the caller's sheet token, and the
- * database checks it (supabase/migrations/20261109060000_bill_sheets.sql).
+ * database checks it (supabase/migrations/20261109060000_bill_sheets.sql). Shared
+ * groups need someone signed in (20261113000000_shared_groups.sql).
  */
 import type { Cents } from '@marmoot/core';
+import type { Action, Group } from './model.ts';
 
 export type AlertStatus = 'not_sent' | 'no_phone' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
@@ -87,12 +89,57 @@ export class ApiError extends Error {
   }
 }
 
-export function createApi(baseUrl: string, key: string, fetchImpl: typeof fetch = (...a) => fetch(...a)) {
+// ------------------------------------------------------------------ shared groups
+
+export interface GroupRow {
+  id: string;
+  name: string;
+  role: 'owner' | 'member';
+  members: number;
+  last_seq: number;
+  pending_requests: number;
+}
+
+export interface GroupEvent {
+  seq: number;
+  client_id: string;
+  action: Action;
+  actor: string;
+  created_at: string;
+}
+
+export interface InviteInfo {
+  group_id: string;
+  group_name: string;
+  inviter: string;
+  members: number;
+  status: 'signed_out' | 'none' | 'pending' | 'approved' | 'declined' | 'member';
+}
+
+export interface JoinRequest {
+  id: string;
+  user_id: string;
+  name: string;
+  email: string | null;
+  created_at: string;
+}
+
+/**
+ * getToken gives the signed-in person's access token, or null to call as a guest with
+ * the publishable key (bill sheets and invite pages need no account).
+ */
+export function createApi(
+  baseUrl: string,
+  key: string,
+  fetchImpl: typeof fetch = (...a) => fetch(...a),
+  getToken: () => Promise<string | null> = async () => null,
+) {
   const url = baseUrl.replace(/\/+$/, '');
-  const headers = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
 
   async function call<T>(path: string, body: unknown): Promise<T> {
     let res: Response;
+    const token = await getToken().catch(() => null);
+    const headers = { apikey: key, Authorization: `Bearer ${token ?? key}`, 'Content-Type': 'application/json' };
     try {
       res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     } catch {
@@ -144,6 +191,20 @@ export function createApi(baseUrl: string, key: string, fetchImpl: typeof fetch 
     /** Marmoot's WhatsApp number messages everyone not yet messaged (or the people listed). */
     sendAlerts: (owner: string, people?: string[], resend = false) =>
       call<SendResult>('/functions/v1/send-bill-alerts', { owner_token: owner, people: people ?? null, resend }),
+
+    // Shared groups. All but inviteInfo need someone signed in.
+    myGroups: () => rpc<GroupRow[]>('my_groups', {}),
+    createSharedGroup: (id: string, name: string, clientId: string, snapshot: Group) =>
+      rpc<number>('create_shared_group', { p_id: id, p_name: name, p_client_id: clientId, p_snapshot: snapshot }),
+    appendEvents: (group: string, events: { client_id: string; action: Action }[]) => rpc<number>('append_group_events', { p_group: group, p_events: events }),
+    eventsSince: (group: string, after: number, limit = 500) => rpc<GroupEvent[]>('group_events_since', { p_group: group, p_after: after, p_limit: limit }),
+    leaveGroup: (group: string) => rpc('leave_group', { p_group: group }),
+    groupInvite: (group: string, inviter: string, reset = false) => rpc<string>('group_invite', { p_group: group, p_inviter: inviter, p_reset: reset }),
+    inviteInfo: (token: string) => rpc<InviteInfo>('invite_info', { p_token: token }),
+    requestToJoin: (token: string, name: string) => rpc<{ group_id: string; status: InviteInfo['status'] }>('request_to_join', { p_token: token, p_name: name }),
+    joinRequests: (group: string) => rpc<JoinRequest[]>('group_join_requests', { p_group: group }),
+    decideJoin: (request: string, approve: boolean, clientId?: string, action?: Action) =>
+      rpc<string>('decide_join_request', { p_request: request, p_approve: approve, p_client_id: clientId ?? null, p_action: action ?? null }),
   };
 }
 

@@ -46,6 +46,7 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
                 <span className="row-main">
                   <span className="row-title">{m.name}{m.id === group.me && m.name !== 'You' ? ' (you)' : ''}</span>
                   <span className="row-sub">
+                    {group.shared ? (m.userId ? 'Joined, ' : 'Not joined yet, ') : ''}
                     {apps.length ? apps.join(', ') : 'No payment apps yet'}
                     {m.id !== group.me && !waNumber(m.phone) ? ', no WhatsApp number' : ''}
                   </span>
@@ -68,14 +69,18 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
         </label>
         {confirmDelete ? (
           <div className="confirm">
-            <p>Delete {group.name} and everything in it from this device?</p>
+            <p>
+              {group.shared
+                ? `Leave ${group.name}? It disappears from your phones. Everyone else keeps it, with your expenses in it.`
+                : `Delete ${group.name} and everything in it from this device?`}
+            </p>
             <div className="two">
-              <button className="pill danger" onClick={() => { dispatch({ type: 'deleteGroup', group: group.id }); go('/'); }}>Delete group</button>
-              <button className="pill" onClick={() => setConfirmDelete(false)}>Keep it</button>
+              <button className="pill danger" onClick={() => { dispatch({ type: 'deleteGroup', group: group.id }); go('/'); }}>{group.shared ? 'Leave group' : 'Delete group'}</button>
+              <button className="pill" onClick={() => setConfirmDelete(false)}>{group.shared ? 'Stay' : 'Keep it'}</button>
             </div>
           </div>
         ) : (
-          <button className="link danger" onClick={() => setConfirmDelete(true)}>Delete this group</button>
+          <button className="link danger" onClick={() => setConfirmDelete(true)}>{group.shared ? 'Leave this group' : 'Delete this group'}</button>
         )}
       </section>
 
@@ -83,7 +88,7 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
         <MemberSheet
           member={editing}
           isMe={editing.id === group.me}
-          inUse={memberInUse(group, editing.id)}
+          inUse={memberInUse(group, editing.id) || !!editing.userId}
           onSave={(m) => { dispatch({ type: 'updateMember', group: group.id, member: m }); setEditing(null); }}
           onRemove={() => { dispatch({ type: 'removeMember', group: group.id, member: editing.id }); setEditing(null); }}
           onClose={() => setEditing(null)}
@@ -122,7 +127,7 @@ function MemberSheet({ member, isMe, inUse, onSave, onRemove, onClose }: { membe
           </label>
         </fieldset>
         <button className="pill primary wide" disabled={!draft.name.trim() || badPhone}>Save</button>
-        {!isMe && (inUse ? <p className="fine">{member.name} is in some expenses, so they stay in the group.</p> : <button type="button" className="link danger" onClick={onRemove}>Remove {member.name}</button>)}
+        {!isMe && (inUse ? <p className="fine">{member.userId ? `${member.name} has joined with their own account, so they stay in the group.` : `${member.name} is in some expenses, so they stay in the group.`}</p> : <button type="button" className="link danger" onClick={onRemove}>Remove {member.name}</button>)}
       </form>
     </Sheet>
   );

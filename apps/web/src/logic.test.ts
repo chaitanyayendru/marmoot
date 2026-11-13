@@ -91,7 +91,6 @@ describe('recurring bills', () => {
   });
 
   it('posts fixed bills that fell due and asks for the amount of variable ones', () => {
-    let id = 0;
     const g: Group = {
       ...flat(),
       recurring: [
@@ -99,12 +98,14 @@ describe('recurring bills', () => {
         { id: 'power', description: 'Electricity', category: 'utilities', amount: null, paidBy: 'ravi', split: { method: 'equal', among: ['you', 'ravi', 'meera'] }, every: 'month', next: '2026-11-05' },
       ],
     };
-    const out = catchUpRecurring(g, '2026-11-08', () => `n${id++}`, 0);
+    const out = catchUpRecurring(g, '2026-11-08', 0);
     expect(out.items.map((i) => i.date)).toEqual(['2026-10-01', '2026-11-01']);
+    // Ids come from the bill and its date, so two phones post the same bill once.
+    expect(out.items.map((i) => i.id)).toEqual(['rent@2026-10-01', 'rent@2026-11-01']);
     expect(out.recurring.find((r) => r.id === 'rent')!.next).toBe('2026-12-01');
     expect(out.due).toEqual([{ recurringId: 'power', date: '2026-11-05' }]);
     // Running it again the same day changes nothing.
-    expect(catchUpRecurring(out, '2026-11-08', () => 'x', 0)).toBe(out);
+    expect(catchUpRecurring(out, '2026-11-08', 0)).toBe(out);
     let s: State = { groups: [out], theme: 'system' };
     s = reducer(s, { type: 'resolveDue', group: 'g', recurringId: 'power', date: '2026-11-05', amount: 14388, id: 'p', at: 1 });
     expect(s.groups[0]!.due).toEqual([]);

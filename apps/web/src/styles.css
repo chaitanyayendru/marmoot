@@ -485,3 +485,18 @@ input.switch:disabled { opacity: 0.5; cursor: default; }
   border-radius: 12px;
   padding: 0.75rem 0.9rem;
 }
+
+/* Sharing: account, invites, people asking to join */
+.topbar-actions { display: inline-flex; align-items: center; gap: 0.25rem; }
+.notice-row { display: grid; gap: 0.35rem; justify-items: end; }
+.notice-row .notice { justify-self: stretch; }
+.label { margin: 0; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
+.account-line { display: flex; align-items: center; gap: 0.75rem; margin: 0; }
+.account-line .row-main { display: grid; }
+.nudge { margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--line); border-radius: 16px; }
+.nudge h2 { margin: 0; font-size: 1.05rem; }
+.requests { display: grid; gap: 0.6rem; margin: 0.5rem 0 1rem; }
+.request { display: grid; gap: 0.6rem; padding: 0.85rem 0.9rem; border-radius: 14px; background: var(--surface); box-shadow: inset 3px 0 0 var(--green); }
+.request p { margin: 0; }
+button.link { display: inline-flex; align-items: center; gap: 0.35rem; }
+code.copy-block { display: block; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }

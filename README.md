@@ -2,6 +2,8 @@
 
 Split the bills you share (groceries, rent, utilities, trips, dinners, game nights) and settle up in the fewest payments, using the payment apps people actually have.
 
+Sign in with Google and a group is shared: roommates join with an invite link, someone in the group lets them in, and everyone sees the same expenses and balances on their own phone.
+
 For a shop with many items, make a **bill sheet**: scan the receipt, then post one WhatsApp message in your group with each person's own link. Each person unticks what they weren't part of (tomatoes yes, onions no). You see who's answered, and the totals land in the group when you close it, ready to copy into Splitwise as exact amounts.
 
 ## What's here
@@ -9,12 +11,12 @@ For a shop with many items, make a **bill sheet**: scan the receipt, then post o
 | Path | What it is |
 | --- | --- |
 | `packages/core` | Settlement core: money math, expense splits (equal, exact, percent, shares), repeating-bill dates, poker nights, itemized bills, the fewest-transfer solver. No dependencies; runs in Node, Deno (Supabase Edge Functions) and the browser. |
-| `apps/web` | The web app (React + Vite, installable on a phone), in light and dark. Groups with expenses, payments, repeating bills and optional game nights; a settle-up plan with pay links; one-tap WhatsApp reminders. Stores groups in the browser until Supabase is connected. |
-| `supabase/migrations` | Database schema: groups, people, expenses and their shares, repeating and due bills, poker sessions, an append-only ledger, transfers, bill sheets with per-person links, the WhatsApp outbox, row-level security. `supabase/setup.sql` is all of it in one file for a new project. |
+| `apps/web` | The web app (React + Vite, installable on a phone), in light and dark. Groups with expenses, payments, repeating bills and optional game nights; a settle-up plan with pay links; one-tap WhatsApp reminders; receipt scanning. Groups stay on the phone until you sign in with Google; then they're shared and kept in step (`src/sync.ts`). |
+| `supabase/migrations` | Database schema: groups, people, expenses and their shares, repeating and due bills, poker sessions, an append-only ledger, transfers, bill sheets with per-person links, the WhatsApp outbox, shared groups (an append-only log per group, invite links, join requests), row-level security. `supabase/setup.sql` is all of it in one file for a new project. |
 | `supabase/functions` | Edge Functions: `send-bill-alerts` sends the WhatsApp template from Marmoot's number; `whatsapp-webhook` records delivered, read and failed. |
-| `supabase/local` | `npm run local`: the whole server on your computer (Postgres, PostgREST, the functions, a pretend WhatsApp inbox) plus the app, for trying bill sheets with no accounts. |
+| `supabase/local` | `npm run local`: the whole server on your computer (Postgres, PostgREST, the functions, a pretend WhatsApp inbox, a pretend Google sign-in) plus the app, for trying bill sheets and shared groups with no accounts. |
 | `supabase/tests` | Database tests against a throwaway Postgres, including SQL vs TypeScript parity on random splits, due dates and poker nights, and bill sheet permissions. |
-| `docs` | [Getting started](docs/GETTING-STARTED.md) on Windows, the [free setup](docs/FREE-HOSTING.md) on GitHub Pages and Supabase, and [Marmoot's own WhatsApp number](docs/SHARING-SETUP.md). |
+| `docs` | [Getting started](docs/GETTING-STARTED.md) on Windows, the [free setup](docs/FREE-HOSTING.md) on GitHub Pages and Supabase, [sign-in and shared groups](docs/SIGN-IN-SETUP.md), and [Marmoot's own WhatsApp number](docs/SHARING-SETUP.md). |
 
 ## Run it
 

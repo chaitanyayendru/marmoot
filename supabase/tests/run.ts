@@ -674,6 +674,128 @@ describe('bill sheets', () => {
   });
 });
 
+describe('shared groups', () => {
+  const userC = '00000000-0000-4000-8000-00000000000c';
+  const snapshot = (id: string) => ({ id, name: 'Flat 4B', createdAt: 1, me: 'm0', members: [{ id: 'm0', name: 'Chai', phone: '', handles: {}, cash: false, userId: userA }], items: [], recurring: [], due: [] });
+  const addItem = (group: string, id: string) => ({ type: 'addItem', group, item: { kind: 'expense', id, at: 1, date: '2026-11-13', description: 'Milk', category: 'groceries', amount: 349, paidBy: 'm0', split: { method: 'equal', among: ['m0'] } } });
+  const ev = (client_id: string, action: unknown) => ({ client_id, action });
+  /** Run as a user whose sign-in carries an email, like Supabase's JWT. */
+  const asWithEmail = <T>(user: string, email: string, fn: Parameters<typeof as<T>>[1]) =>
+    as(user, async (q) => {
+      await q("select set_config('request.jwt.claim.email', $1, true)", [email]);
+      return fn(q);
+    });
+
+  async function newGroup(): Promise<string> {
+    const id = randomUUID();
+    await as(userA, (q) => q('select create_shared_group($1, $2, $3, $4)', [id, 'Flat 4B', `create-${id}`, JSON.stringify(snapshot(id))]));
+    return id;
+  }
+
+  test('a new group starts its log with itself; only members read or add to it', async (t) => {
+    if (!url) return t.skip();
+    await db.query('insert into auth.users (id) values ($1) on conflict do nothing', [userC]);
+    const id = await newGroup();
+    // Retrying the same create is harmless.
+    assert.equal(await as(userA, async (q) => (await q('select create_shared_group($1, $2, $3, $4) as n', [id, 'Flat 4B', `create-${id}`, JSON.stringify(snapshot(id))])).rows[0].n), 1);
+    const mine = await as(userA, async (q) => (await q('select * from my_groups() where id = $1', [id])).rows);
+    assert.deepEqual(mine.map((g) => [g.name, g.role, g.members, g.last_seq]), [['Flat 4B', 'owner', 1, 1]]);
+    const log = await as(userA, async (q) => (await q('select * from group_events_since($1, 0)', [id])).rows);
+    assert.deepEqual(log.map((e) => [e.seq, e.action.type, e.action.group.id]), [[1, 'createGroup', id]]);
+
+    await assert.rejects(as(userB, (q) => q('select * from group_events_since($1, 0)', [id])), /not in this group/);
+    await assert.rejects(as(userB, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev('b-1-xxxxxx', addItem(id, 'x'))])])), /not in this group/);
+    assert.equal((await as(userB, (q) => q('select * from my_groups() where id = $1', [id]))).rows.length, 0);
+    // Someone else can't take over an existing group id.
+    await assert.rejects(as(userB, (q) => q('select create_shared_group($1, $2, $3, $4)', [id, 'Mine', `steal-${id}`, JSON.stringify(snapshot(id))])), /already exists/);
+  });
+
+  test('changes append in order, a retry is not counted twice, and odd changes are refused', async (t) => {
+    if (!url) return t.skip();
+    const id = await newGroup();
+    const other = await newGroup();
+    const n = await as(userA, async (q) => (await q('select append_group_events($1, $2) as n', [id, JSON.stringify([ev('a-1-xxxxxx', addItem(id, 'e1')), ev('a-2-xxxxxx', addItem(id, 'e2'))])])).rows[0].n);
+    assert.equal(n, 3);
+    // The phone retries after a dropped connection: nothing new.
+    assert.equal(await as(userA, async (q) => (await q('select append_group_events($1, $2) as n', [id, JSON.stringify([ev('a-2-xxxxxx', addItem(id, 'e2'))])])).rows[0].n), 3);
+    const after1 = await as(userA, async (q) => (await q('select * from group_events_since($1, 1)', [id])).rows);
+    assert.deepEqual(after1.map((e) => [e.seq, e.action.item.id]), [[2, 'e1'], [3, 'e2']]);
+
+    const refused = async (action: unknown, re: RegExp) =>
+      assert.rejects(as(userA, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev(`r-${randomUUID()}`, action)])])), re);
+    await refused({ type: 'createGroup', group: snapshot(id) }, /can't be shared/);
+    await refused({ type: 'setGeminiKey', key: 'secret' }, /can't be shared/);
+    await refused(addItem(other, 'e3'), /another group/);
+    await refused({ type: 'addMember', group: id, member: { id: 'm9', name: 'Ben', phone: '', handles: {}, cash: false, userId: userB } }, /joined the group/);
+
+    await as(userA, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev('a-3-xxxxxx', { type: 'renameGroup', group: id, name: '  Flat 5C ' })])]));
+    assert.equal((await as(userA, (q) => q('select name from my_groups() where id = $1', [id]))).rows[0].name, 'Flat 5C');
+    await assert.rejects(db.query("update group_events set action = '{\"type\":\"x\"}' where group_id = $1", [id]), /append-only/);
+  });
+
+  test('invite link, ask to join, approve with a link to an existing member; decline and ask again', async (t) => {
+    if (!url) return t.skip();
+    const id = await newGroup();
+    const token = await as(userA, async (q) => (await q('select group_invite($1, $2) as t', [id, 'Chai'])).rows[0].t as string);
+    assert.equal(await as(userA, async (q) => (await q('select group_invite($1) as t', [id])).rows[0].t), token, 'same link until reset');
+
+    const preview = await asRole('anon', async (q) => (await q('select invite_info($1) as i', [token])).rows[0].i);
+    assert.deepEqual(preview, { group_id: id, group_name: 'Flat 4B', inviter: 'Chai', members: 1, status: 'signed_out' });
+    assert.equal((await as(userB, async (q) => (await q('select invite_info($1) as i', [token])).rows[0].i)).status, 'none');
+    await assert.rejects(asRole('anon', (q) => q('select request_to_join($1, $2)', [token, 'Ben'])), /permission denied/);
+
+    const asked = await asWithEmail(userB, 'ben@example.com', async (q) => (await q('select request_to_join($1, $2) as r', [token, ' Ben '])).rows[0].r);
+    assert.deepEqual(asked, { group_id: id, status: 'pending' });
+    await assert.rejects(as(userB, (q) => q('select * from group_events_since($1, 0)', [id])), /not in this group/, 'not in until approved');
+    await assert.rejects(as(userB, (q) => q('select * from group_join_requests($1)', [id])), /not in this group/);
+    const requests = await as(userA, async (q) => (await q('select * from group_join_requests($1)', [id])).rows);
+    assert.deepEqual(requests.map((r) => [r.name, r.email, r.user_id]), [['Ben', 'ben@example.com', userB]]);
+    assert.equal((await as(userA, (q) => q('select pending_requests from my_groups() where id = $1', [id]))).rows[0].pending_requests, 1);
+
+    // Approving can only link the person who asked.
+    const link = (userId: string) => JSON.stringify({ type: 'updateMember', group: id, member: { id: 'm1', name: 'Ben', phone: '', handles: {}, cash: false, userId } });
+    await assert.rejects(as(userA, (q) => q('select decide_join_request($1, true, $2, $3)', [requests[0].id, 'approve-xxxxxx', link(userC)])), /person who asked/);
+    assert.equal(await as(userA, async (q) => (await q('select decide_join_request($1, true, $2, $3) as s', [requests[0].id, 'approve-ben-1', link(userB)])).rows[0].s), 'approved');
+    assert.equal(await as(userA, async (q) => (await q('select decide_join_request($1, false) as s', [requests[0].id])).rows[0].s), 'approved', 'deciding twice changes nothing');
+
+    const bens = await as(userB, async (q) => (await q('select * from group_events_since($1, 0)', [id])).rows);
+    assert.deepEqual(bens.map((e) => e.action.type), ['createGroup', 'updateMember']);
+    assert.equal(bens[1].action.member.userId, userB);
+    assert.equal((await as(userB, async (q) => (await q('select invite_info($1) as i', [token])).rows[0].i)).status, 'member');
+    assert.equal((await as(userB, (q) => q('select role from my_groups() where id = $1', [id]))).rows[0].role, 'member');
+    // Now Ben is in, he can be linked and can add expenses.
+    await as(userB, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev('b-1-yyyyyy', addItem(id, 'eb'))])]));
+
+    // C asks, is declined, asks again.
+    await asWithEmail(userC, 'c@example.com', (q) => q('select request_to_join($1, $2)', [token, 'Cy']));
+    const cReq = (await as(userA, async (q) => (await q('select * from group_join_requests($1)', [id])).rows))[0];
+    assert.equal(await as(userB, async (q) => (await q('select decide_join_request($1, false) as s', [cReq.id])).rows[0].s), 'declined');
+    assert.equal((await as(userC, async (q) => (await q('select invite_info($1) as i', [token])).rows[0].i)).status, 'declined');
+    await as(userC, (q) => q('select request_to_join($1, $2)', [token, 'Cy']));
+    assert.equal((await as(userC, async (q) => (await q('select invite_info($1) as i', [token])).rows[0].i)).status, 'pending');
+
+    // A new link stops the old one.
+    const fresh = await as(userB, async (q) => (await q('select group_invite($1, $2, true) as t', [id, 'Ben'])).rows[0].t as string);
+    assert.notEqual(fresh, token);
+    await assert.rejects(asRole('anon', (q) => q('select invite_info($1)', [token])), /doesn't work any more/);
+
+    // Leaving takes you out; your member and their expenses stay in the group.
+    await as(userB, (q) => q('select leave_group($1)', [id]));
+    assert.equal((await as(userB, (q) => q('select * from my_groups() where id = $1', [id]))).rows.length, 0);
+    assert.equal((await as(userA, (q) => q('select members from my_groups() where id = $1', [id]))).rows[0].members, 1);
+  });
+
+  test('shared-group tables are closed to the API', async (t) => {
+    if (!url) return t.skip();
+    for (const table of ['group_events', 'group_invites', 'join_requests']) {
+      await assert.rejects(as(userA, (q) => q(`select * from ${table}`)), /permission denied/, table);
+      await assert.rejects(anon(`select * from ${table}`), /permission denied/, table);
+    }
+    await assert.rejects(anon('select * from my_groups()'), /permission denied/);
+    await assert.rejects(as(userA, (q) => q("select insert_group_events(gen_random_uuid(), $1, '[]'::jsonb)", [userA])), /permission denied/);
+  });
+});
+
 test('supabase/setup.sql matches the migrations (run npm run setup-sql after changing one)', () => {
   assert.equal(readFileSync(`${supabaseDir}setup.sql`, 'utf8'), setupSql());
 });

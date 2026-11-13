@@ -34,6 +34,8 @@ export interface Member {
   handles: Partial<Record<PayApp, string>>;
   /** Happy to settle in cash. */
   cash: boolean;
+  /** The Marmoot account of this person, once they've joined a shared group. */
+  userId?: string;
 }
 
 // ------------------------------------------------------------------ things that happen in a group
@@ -153,6 +155,10 @@ export interface Group {
   due: DueBill[];
   /** Bill sheets started from this group. Older saves lack it. */
   sheets?: SheetRef[];
+  /** Kept on Marmoot's server and shared with everyone who has joined. */
+  shared?: boolean;
+  /** The sample flat: never shared. */
+  sample?: boolean;
 }
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -183,16 +189,21 @@ export function shortDate(date: string): string {
 
 // ------------------------------------------------------------------ recurring bills
 
-/** Post fixed recurring bills that have fallen due, and queue variable ones as "enter this month's amount". */
-export function catchUpRecurring(g: Group, todayStr: string, newId: () => string, now: number): Group {
+/**
+ * Post fixed recurring bills that have fallen due, and queue variable ones as "enter
+ * this month's amount". Each posted bill's id comes from the bill and its date, so
+ * catching up twice, or on two phones in a shared group, posts it once.
+ */
+export function catchUpRecurring(g: Group, todayStr: string, now: number): Group {
   if (!g.recurring.some((r) => r.next <= todayStr)) return g;
   const items = [...g.items];
   const due = [...g.due];
   const recurring = g.recurring.map((r) => {
     let next = r.next;
     for (let guard = 0; next <= todayStr && guard < 24; guard++) {
+      const id = `${r.id}@${next}`;
       if (r.amount !== null) {
-        items.push({ kind: 'expense', id: newId(), at: now, date: next, description: r.description, category: r.category, amount: r.amount, paidBy: r.paidBy, split: r.split, recurringId: r.id });
+        if (!items.some((i) => i.id === id)) items.push({ kind: 'expense', id, at: now, date: next, description: r.description, category: r.category, amount: r.amount, paidBy: r.paidBy, split: r.split, recurringId: r.id });
       } else if (!due.some((d) => d.recurringId === r.id && d.date === next)) {
         due.push({ recurringId: r.id, date: next });
       }
@@ -218,11 +229,31 @@ export type Action =
   | { type: 'deleteItem'; group: string; item: string }
   | { type: 'addRecurring'; group: string; recurring: Recurring }
   | { type: 'deleteRecurring'; group: string; recurring: string }
-  | { type: 'catchUp'; today: string; ids: () => string; now: number }
+  | { type: 'catchUp'; today: string; now: number; group?: string }
   | { type: 'resolveDue'; group: string; recurringId: string; date: string; amount: number | null; id: string; at: number }
   | { type: 'updateGame'; group: string; game: string; update: GameUpdate }
   | { type: 'addSheet'; group: string; sheet: SheetRef }
-  | { type: 'closeSheet'; group: string; sheet: string; expense: ExpenseItem };
+  | { type: 'closeSheet'; group: string; sheet: string; expense: ExpenseItem }
+  // From the server, never sent back: shared groups as they now stand, and ones you've left.
+  | { type: 'putGroups'; groups: Group[] }
+  | { type: 'dropGroups'; ids: string[] };
+
+/** Actions that change one group, and so are shared when the group is. */
+export function groupOf(a: Action): string | null {
+  switch (a.type) {
+    case 'setTheme':
+    case 'setGeminiKey':
+    case 'putGroups':
+    case 'dropGroups':
+      return null;
+    case 'createGroup':
+      return a.group.id;
+    case 'catchUp':
+      return a.group ?? null;
+    default:
+      return a.group;
+  }
+}
 
 export type GameUpdate =
   | { kind: 'buyIn'; player: string; amount: number; ids: [string, string]; at: number }
@@ -327,9 +358,19 @@ export function reducer(s: State, a: Action): State {
     case 'deleteRecurring':
       return mapGroup(s, a.group, (g) => ({ ...g, recurring: g.recurring.filter((r) => r.id !== a.recurring), due: g.due.filter((d) => d.recurringId !== a.recurring) }));
     case 'catchUp': {
-      const groups = s.groups.map((g) => catchUpRecurring(g, a.today, a.ids, a.now));
+      // Without a group: every group kept on this phone. Shared groups catch up through their own log.
+      const groups = s.groups.map((g) => ((a.group ? g.id === a.group : !g.shared) ? catchUpRecurring(g, a.today, a.now) : g));
       return groups.every((g, i) => g === s.groups[i]) ? s : { ...s, groups };
     }
+    case 'putGroups': {
+      if (!a.groups.length) return s;
+      const byId = new Map(a.groups.map((g) => [g.id, g]));
+      const kept = s.groups.map((g) => byId.get(g.id) ?? g);
+      const added = a.groups.filter((g) => !s.groups.some((x) => x.id === g.id));
+      return { ...s, groups: [...added, ...kept] };
+    }
+    case 'dropGroups':
+      return a.ids.length ? { ...s, groups: s.groups.filter((g) => !a.ids.includes(g.id)) } : s;
     case 'resolveDue':
       return mapGroup(s, a.group, (g) => {
         const r = g.recurring.find((x) => x.id === a.recurringId);

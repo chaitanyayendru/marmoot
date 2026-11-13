@@ -21,6 +21,7 @@ export function sampleGroup(now = Date.now()): Group {
   return {
     id: newId(),
     name: 'Flat 4B (sample)',
+    sample: true,
     createdAt: now,
     me: you.id,
     members: [you, ravi, meera, sana],

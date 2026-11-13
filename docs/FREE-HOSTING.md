@@ -46,6 +46,10 @@ There are no secrets to set in GitHub. The Supabase URL and publishable key are 
 4. Each roommate opens their link (no app or account needed), unticks what they weren't part of, and taps **Done**. You see their choices on your sheet as they come in.
 5. When everyone's done, tap **Copy for Splitwise**. In Splitwise, add an expense for the total, choose **split by exact amounts**, and type in the amounts.
 
+## Next: sign-in and shared groups
+
+To let roommates join your groups and see the same balances on their phones, follow [SIGN-IN-SETUP.md](SIGN-IN-SETUP.md). It's free and takes about 15 minutes more.
+
 ## Good to know
 
 - **Supabase pauses a free project after about a week with no use.** The app then can't load sheets. Open the Supabase dashboard and click **Restore project**; your data is kept.

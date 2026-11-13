@@ -30,6 +30,8 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
   const [showText, setShowText] = useState<string | null>(null);
 
   const totals = useMemo(() => (data ? sheetTotals(data) : null), [data]);
+  // In a shared group anyone in it can open the bill; "You" is whoever is looking.
+  const myPerson = sheetRef.people.find((p) => p.memberId === group.me)?.personId ?? null;
   if (!data || !totals) {
     return (
       <main className="page">
@@ -157,7 +159,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
                 const st = responseStatus(p);
                 return (
                   <th key={p.id} scope="col" className="person-col">
-                    <span className="person-name">{p.is_owner ? 'You' : first(p.name)}</span>
+                    <span className="person-name">{p.id === myPerson ? 'You' : first(p.name)}</span>
                     <span className={`status ${st.tone}`}>{st.label}</span>
                   </th>
                 );

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@marmoot/core": "0.1.0",
+    "@supabase/auth-js": "^2.119.0",
     "exceljs": "^4.4.0",
     "lucide-react": "^1.70.0",
     "react": "^19.2.0",

@@ -1,10 +1,12 @@
-import { useEffect, useReducer, useState, useSyncExternalStore } from 'react';
-import { newId, reducer, today } from './model.ts';
+import { useEffect, useReducer, useState, useSyncExternalStore, type Dispatch } from 'react';
+import { AccountProvider } from './account.tsx';
+import { reducer, today, type Action, type State } from './model.ts';
 import { api } from './apiClient.ts';
 import { load, save } from './storage.ts';
 import { GameView } from './ui/GameView.tsx';
 import { GroupView } from './ui/GroupView.tsx';
 import { GuestSheet } from './ui/GuestSheet.tsx';
+import { JoinPage } from './ui/JoinPage.tsx';
 import { NewSheet } from './ui/NewSheet.tsx';
 import { SheetView } from './ui/SheetView.tsx';
 import { Home } from './ui/Home.tsx';
@@ -14,7 +16,11 @@ import { SettleView } from './ui/SettleView.tsx';
 
 const subscribe = (cb: () => void) => {
   window.addEventListener('hashchange', cb);
-  return () => window.removeEventListener('hashchange', cb);
+  window.addEventListener('popstate', cb);
+  return () => {
+    window.removeEventListener('hashchange', cb);
+    window.removeEventListener('popstate', cb);
+  };
 };
 
 export function go(path: string) {
@@ -25,13 +31,16 @@ export function go(path: string) {
 export function App() {
   const [state, dispatch] = useReducer(reducer, undefined, load);
   const [saved, setSaved] = useState(true);
-  const hash = useSyncExternalStore(subscribe, () => window.location.hash, () => '');
+  // The whole address, so coming back from sign-in to an invite link (?join=) re-renders too.
+  const href = useSyncExternalStore(subscribe, () => window.location.href, () => '');
+  const hash = new URL(href || window.location.href).hash;
 
   useEffect(() => setSaved(save(state)), [state]);
 
-  // Post recurring bills that fell due since the app was last open.
+  // Post recurring bills that fell due since the app was last open (groups on this phone;
+  // shared groups catch up through their own log).
   useEffect(() => {
-    dispatch({ type: 'catchUp', today: today(), ids: newId, now: Date.now() });
+    dispatch({ type: 'catchUp', today: today(), now: Date.now() });
   }, []);
 
   // Light, dark, or follow the phone's setting.
@@ -50,10 +59,22 @@ export function App() {
   }, [state.theme]);
 
   // Someone opening their link to a bill sheet: ?s=<their token>.
-  const guestToken = new URLSearchParams(window.location.search).get('s');
+  const params = new URL(href || window.location.href).searchParams;
+  const guestToken = params.get('s');
   if (guestToken) {
     return api ? <GuestSheet api={api} token={guestToken} /> : <main className="page"><p className="muted">This copy of Marmoot isn't connected to its server, so it can't open shared bills.</p></main>;
   }
+
+  return (
+    <AccountProvider state={state} dispatch={dispatch}>
+      {(act) => <Screens state={state} dispatch={act} saved={saved} hash={hash} joinToken={params.get('join')} />}
+    </AccountProvider>
+  );
+}
+
+function Screens({ state, dispatch, saved, hash, joinToken }: { state: State; dispatch: Dispatch<Action>; saved: boolean; hash: string; joinToken: string | null }) {
+  // Someone opening a group's invite link: ?join=<token>.
+  if (joinToken) return <JoinPage token={joinToken} />;
 
   const common = { dispatch, saved };
   if (hash === '#/new') return <NewGroup {...common} />;

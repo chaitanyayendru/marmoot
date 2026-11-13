@@ -10,13 +10,15 @@
  *   - the two Edge Functions, run in Node;
  *   - a pretend WhatsApp: messages Marmoot "sends" land in an inbox page at
  *     http://localhost:54321/whatsapp, with the same button a real message has;
+ *   - a pretend Google sign-in: pick who you are (Chai, Asha, Ben or anyone), so
+ *     shared groups, invites and approvals can be tried with two browsers;
  *   - the web app at http://localhost:5173, already pointed at all of the above.
  *
  * Everything is deleted when you stop it with Ctrl+C.
  * Flags: --no-web (don't start the web app), --port N (default 54321).
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { join } from 'node:path';
@@ -37,11 +39,23 @@ const base = `http://localhost:${port}`;
 
 const jwtSecret = randomBytes(32).toString('hex');
 const b64url = (s: string | Buffer) => Buffer.from(s).toString('base64url');
-function jwt(role: string): string {
+function jwt(role: string, claims: Record<string, unknown> = {}, ttl = 30 * 86400): string {
   const head = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const body = b64url(JSON.stringify({ role, iss: 'marmoot-local', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 30 * 86400 }));
+  const now = Math.floor(Date.now() / 1000);
+  const body = b64url(JSON.stringify({ role, iss: 'marmoot-local', iat: now, exp: now + ttl, ...claims }));
   const sig = createHmac('sha256', jwtSecret).update(`${head}.${body}`).digest('base64url');
   return `${head}.${body}.${sig}`;
+}
+
+/** The claims of a token this server signed, or null. */
+function verifyJwt(token: string): Record<string, any> | null {
+  const [head, body, sig] = token.split('.');
+  if (!head || !body || !sig) return null;
+  const want = createHmac('sha256', jwtSecret).update(`${head}.${body}`).digest();
+  const got = Buffer.from(sig, 'base64url');
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return null;
+  const claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  return claims.exp > Date.now() / 1000 ? claims : null;
 }
 const anonKey = jwt('anon');
 const serviceKey = jwt('service_role');
@@ -131,6 +145,121 @@ li{background:#202c33;border-radius:12px;padding:.75rem 1rem}li p{margin:.2rem 0
 <body><main><h1>Pretend WhatsApp</h1><p class="lead">Messages Marmoot's local server would have sent. Each person's button opens their own link. This page refreshes itself.</p><ul>${rows}</ul></main></body></html>`;
 }
 
+// ------------------------------------------------------------------ pretend Google sign-in
+//
+// The parts of Supabase Auth the app uses, so "Sign in with Google" works with no
+// accounts anywhere: /authorize shows a page to pick who you are, then the app trades
+// the code for a session exactly as it does with Supabase (PKCE).
+
+interface LocalUser { id: string; email: string; name: string }
+const PRESET_USERS = [
+  { name: 'Chai', email: 'chai@example.com' },
+  { name: 'Asha', email: 'asha@example.com' },
+  { name: 'Ben', email: 'ben@example.com' },
+];
+const pendingSignIns = new Map<string, { redirectTo: string; challenge: string; method: string }>();
+const authCodes = new Map<string, { user: LocalUser; challenge: string; method: string }>();
+const refreshTokens = new Map<string, LocalUser>();
+let authDb: pg.Pool | null = null;
+
+/** The same id for the same email, every run. */
+function userFor(email: string, name: string): LocalUser {
+  const h = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+  const id = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  return { id, email: email.trim().toLowerCase(), name: name.trim() || email.split('@')[0]! };
+}
+
+function authUser(u: LocalUser) {
+  return {
+    id: u.id, aud: 'authenticated', role: 'authenticated', email: u.email,
+    user_metadata: { full_name: u.name, name: u.name, email: u.email },
+    app_metadata: { provider: 'google', providers: ['google'] },
+    created_at: new Date(0).toISOString(), identities: [],
+  };
+}
+
+function session(u: LocalUser) {
+  const refresh = randomBytes(18).toString('base64url');
+  refreshTokens.set(refresh, u);
+  const expiresIn = 3600;
+  return {
+    access_token: jwt('authenticated', { aud: 'authenticated', sub: u.id, email: u.email, user_metadata: { full_name: u.name, name: u.name } }, expiresIn),
+    token_type: 'bearer',
+    expires_in: expiresIn,
+    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
+    refresh_token: refresh,
+    user: authUser(u),
+  };
+}
+
+const authError = (status: number, code: string, msg: string) => Response.json({ error: code, error_description: msg, msg }, { status });
+
+function pickAccountPage(state: string): string {
+  const choose = (u: { name: string; email: string }) =>
+    `<li><a class="acct" href="/auth/v1/pretend-google?state=${encodeURIComponent(state)}&name=${encodeURIComponent(u.name)}&email=${encodeURIComponent(u.email)}"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></a></li>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pretend Google · Marmoot local</title>
+<style>body{font:16px/1.45 system-ui,sans-serif;margin:0;background:#f1f3f4;color:#202124}main{max-width:26rem;margin:2rem auto;background:#fff;border-radius:16px;padding:1.5rem}
+h1{font-size:1.3rem;margin:0 0 .25rem}p{color:#5f6368;margin:0 0 1rem}ul{list-style:none;padding:0;margin:0 0 1rem;border-top:1px solid #e8eaed}
+.acct{display:flex;flex-direction:column;padding:.7rem .25rem;border-bottom:1px solid #e8eaed;color:inherit;text-decoration:none}.acct span{color:#5f6368;font-size:.9rem}
+form{display:grid;gap:.5rem}input,button{font:inherit;padding:.6rem;border-radius:8px;border:1px solid #dadce0}button{background:#1a73e8;color:#fff;border:0}</style></head>
+<body><main><h1>Choose an account</h1><p>Pretend Google, on your computer. Pick who you are for this browser.</p>
+<ul>${PRESET_USERS.map(choose).join('')}</ul>
+<form action="/auth/v1/pretend-google"><input type="hidden" name="state" value="${esc(state)}"><input name="name" placeholder="Name" required><input name="email" type="email" placeholder="Email" required><button>Use another account</button></form>
+</main></body></html>`;
+}
+
+async function handleAuth(url: URL, req: http.IncomingMessage, raw: Buffer | undefined): Promise<Response> {
+  const path = url.pathname.slice('/auth/v1'.length);
+  if (path === '/authorize') {
+    if (url.searchParams.get('provider') !== 'google') return authError(400, 'validation_failed', 'Only Google is set up here.');
+    const redirectTo = url.searchParams.get('redirect_to') || appUrl;
+    if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(redirectTo)) return authError(400, 'validation_failed', `redirect_to is not allowed: ${redirectTo}`);
+    const state = randomBytes(12).toString('base64url');
+    pendingSignIns.set(state, { redirectTo, challenge: url.searchParams.get('code_challenge') ?? '', method: (url.searchParams.get('code_challenge_method') ?? 's256').toLowerCase() });
+    return new Response(pickAccountPage(state), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  }
+  if (path === '/pretend-google') {
+    const p = pendingSignIns.get(url.searchParams.get('state') ?? '');
+    const email = url.searchParams.get('email') ?? '';
+    if (!p || !email.includes('@')) return authError(400, 'bad_oauth_state', 'Start signing in again from the app.');
+    pendingSignIns.delete(url.searchParams.get('state')!);
+    const user = userFor(email, url.searchParams.get('name') ?? '');
+    await authDb!.query('insert into auth.users (id) values ($1) on conflict do nothing', [user.id]);
+    const code = randomBytes(16).toString('base64url');
+    authCodes.set(code, { user, challenge: p.challenge, method: p.method });
+    const to = new URL(p.redirectTo);
+    to.searchParams.set('code', code);
+    return new Response(null, { status: 302, headers: { Location: to.toString() } });
+  }
+  if (path === '/token' && req.method === 'POST') {
+    const body = JSON.parse(raw?.toString('utf8') || '{}');
+    const grant = url.searchParams.get('grant_type');
+    if (grant === 'pkce') {
+      const c = authCodes.get(body.auth_code);
+      if (!c) return authError(400, 'flow_state_not_found', 'invalid flow state, no valid flow state found');
+      authCodes.delete(body.auth_code);
+      const expected = c.method === 'plain' ? body.code_verifier : createHash('sha256').update(String(body.code_verifier)).digest('base64url');
+      if (expected !== c.challenge) return authError(400, 'bad_code_verifier', 'code challenge does not match previously saved code verifier');
+      return Response.json(session(c.user));
+    }
+    if (grant === 'refresh_token') {
+      const u = refreshTokens.get(body.refresh_token);
+      if (!u) return authError(400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
+      refreshTokens.delete(body.refresh_token);
+      return Response.json(session(u));
+    }
+    return authError(400, 'unsupported_grant_type', `grant_type ${grant} isn't supported here`);
+  }
+  const bearer = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+  const claims = verifyJwt(bearer);
+  if (path === '/user' && req.method === 'GET') {
+    if (!claims?.sub || claims.role !== 'authenticated') return authError(401, 'bad_jwt', 'invalid JWT');
+    return Response.json(authUser({ id: claims.sub, email: claims.email, name: claims.user_metadata?.full_name ?? '' }));
+  }
+  if (path === '/logout') return new Response(null, { status: 204 });
+  return authError(404, 'not_found', `${path} isn't part of the pretend sign-in`);
+}
+
 // ------------------------------------------------------------------ gateway
 
 let restPort = 0;
@@ -173,7 +302,8 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', base);
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, corsHeaders).end();
+      const asked = req.headers['access-control-request-headers'];
+      res.writeHead(204, { ...corsHeaders, ...(asked ? { 'Access-Control-Allow-Headers': String(asked) } : {}) }).end();
       return;
     }
     const raw = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
@@ -187,6 +317,7 @@ const server = http.createServer(async (req, res) => {
       headers.delete('host');
       return await send(res, await fetch(upstream, { method: req.method, headers, body }));
     }
+    if (url.pathname.startsWith('/auth/v1/')) return await send(res, await handleAuth(url, req, raw));
     if (url.pathname === '/functions/v1/send-bill-alerts') return await send(res, await handleSendBillAlerts(request, env));
     if (url.pathname === '/functions/v1/whatsapp-webhook') return await send(res, await handleWhatsAppWebhook(request, env));
     if (url.pathname.startsWith('/graph/') && url.pathname.endsWith('/messages')) {
@@ -219,6 +350,7 @@ const children: ChildProcess[] = [];
 async function shutdown() {
   for (const c of children) c.kill();
   server.close();
+  await authDb?.end();
   await stopCluster();
   process.exit(0);
 }
@@ -241,6 +373,7 @@ await db.query(`
   end $$;
   grant anon, authenticated, service_role to authenticator;`);
 await db.end();
+authDb = new pg.Pool({ connectionString: dbUrl, max: 2 });
 
 restPort = 55000 + Math.floor(Math.random() * 5000);
 const pgrst = spawn(await postgrestBin(), [], {
@@ -275,6 +408,7 @@ console.log(`
 Marmoot's local server is running.
   API:               ${base}
   Pretend WhatsApp:  ${base}/whatsapp
+  Pretend Google:    "Sign in with Google" in the app lets you pick Chai, Asha, Ben or anyone
   Anon key:          ${anonKey}
 `);
 

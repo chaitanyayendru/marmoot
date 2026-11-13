@@ -22,6 +22,7 @@ import { BalanceChart } from './Chart.tsx';
 import { CategoryIcon, NotSaving, Sheet, Signed } from './bits.tsx';
 import { ExpenseSheet } from './ExpenseSheet.tsx';
 import { prefillSheet } from './NewSheet.tsx';
+import { InviteButton, JoinRequests } from './Sharing.tsx';
 
 const monthOf = (date: string) => {
   const [y, m] = date.split('-').map(Number) as [number, number];
@@ -56,11 +57,18 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
     <main className="page with-bar">
       <header className="topbar">
         <a className="back" href="#/"><ChevronLeft size={22} /> Groups</a>
-        <a className="icon-btn" href={`#/g/${group.id}/people`} aria-label="People in this group">
-          <Users size={22} strokeWidth={1.75} />
-        </a>
+        <span className="topbar-actions">
+          <InviteButton group={group} />
+          <a className="icon-btn" href={`#/g/${group.id}/people`} aria-label="People in this group">
+            <Users size={22} strokeWidth={1.75} />
+          </a>
+        </span>
       </header>
       {!saved && <NotSaving />}
+      {group.shared && <JoinRequests group={group} />}
+      {group.shared && !group.me && (
+        <p className="notice warn">You’re in this group, but not linked to anyone in its list yet. Ask someone in it to add you.</p>
+      )}
 
       <section className="hero" aria-label={`Your balance in ${group.name}`}>
         <h1 className="hero-title">{group.name}</h1>

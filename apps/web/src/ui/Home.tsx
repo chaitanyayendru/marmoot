@@ -5,10 +5,13 @@ import { usd } from '../money.ts';
 import { balanceHistory, groupNets, type Action, type State, type Theme } from '../model.ts';
 import { sampleGroup } from '../sample.ts';
 import { BalanceChart } from './Chart.tsx';
-import { NotSaving, Sheet, Signed } from './bits.tsx';
+import { useAccount } from '../account.tsx';
+import { Notice, NotSaving, Sheet, Signed } from './bits.tsx';
+import { AccountSection, SignInButton } from './Sharing.tsx';
 
 export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispatch<Action>; saved: boolean }) {
   const [settings, setSettings] = useState(false);
+  const account = useAccount();
   const rows = useMemo(
     () => state.groups.map((g) => ({ g, mine: groupNets(g).get(g.me) ?? 0, people: g.members.length })),
     [state.groups],
@@ -37,6 +40,13 @@ export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispa
       </header>
 
       {!saved && <NotSaving />}
+      {account.message && (
+        <div className="notice-row">
+          <Notice tone="warn">{account.message}</Notice>
+          <button className="link" onClick={account.dismiss}>Dismiss</button>
+        </div>
+      )}
+      {account.moving && <Notice>Moving your groups to your account…</Notice>}
 
       {state.groups.length > 0 ? (
         <section className="hero" aria-label="Your balance">
@@ -72,7 +82,11 @@ export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispa
                 <a className="list-row" href={`#/g/${g.id}`}>
                   <span className="row-main">
                     <span className="row-title">{g.name}</span>
-                    <span className="row-sub">{people} people{g.due.length ? `, ${g.due.length} bill${g.due.length > 1 ? 's' : ''} to enter` : ''}</span>
+                    <span className="row-sub">
+                      {people} people{g.shared ? ', shared' : ''}
+                      {g.due.length ? `, ${g.due.length} bill${g.due.length > 1 ? 's' : ''} to enter` : ''}
+                      {account.requests[g.id] ? `, ${account.requests[g.id]} asking to join` : ''}
+                    </span>
                   </span>
                   <span className="row-end">
                     <Signed cents={mine} />
@@ -84,6 +98,14 @@ export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispa
           </ul>
         )}
       </section>
+
+      {account.available && account.ready && !account.session && rows.some(({ g }) => !g.sample) && (
+        <section className="stack tight nudge" aria-label="Share with roommates">
+          <h2>Share with your roommates</h2>
+          <p className="fine">Sign in and your groups move to your account. Roommates join with a link and see the same balances on their phones.</p>
+          <SignInButton />
+        </section>
+      )}
 
       {settings && (
         <Sheet title="Settings" onClose={() => setSettings(false)}>
@@ -100,8 +122,9 @@ export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispa
               </label>
             ))}
           </fieldset>
+          <AccountSection />
           <GeminiKeyField value={state.geminiKey ?? ''} onSave={(key) => dispatch({ type: 'setGeminiKey', key })} />
-          <p className="fine">Your groups are stored on this device until accounts arrive.</p>
+          {!account.session && <p className="fine">Until you sign in, your groups are stored only on this device.</p>}
         </Sheet>
       )}
     </main>

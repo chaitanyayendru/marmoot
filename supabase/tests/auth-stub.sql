@@ -9,6 +9,14 @@ language sql stable as $$
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
   )::uuid
 $$;
+create or replace function auth.jwt() returns jsonb
+language sql stable as $$
+  select coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb,
+    jsonb_build_object('sub', nullif(current_setting('request.jwt.claim.sub', true), ''),
+                       'email', nullif(current_setting('request.jwt.claim.email', true), ''))
+  )
+$$;
 do $$
 begin
   if not exists (select from pg_roles where rolname = 'anon') then create role anon nologin; end if;

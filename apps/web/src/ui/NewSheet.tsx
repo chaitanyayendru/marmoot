@@ -26,8 +26,8 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
   prefill = null;
   const s = start.current;
   const nextKey = useRef(2);
-  const meMember = group.members.find((m) => m.id === group.me)!;
-  const [ownerName, setOwnerName] = useState(meMember.name === 'You' ? '' : meMember.name);
+  const meMember = group.members.find((m) => m.id === group.me);
+  const [ownerName, setOwnerName] = useState(!meMember || meMember.name === 'You' ? '' : meMember.name);
   const [title, setTitle] = useState(s?.title ?? '');
   const [category, setCategory] = useState<Category>(s?.category ?? 'groceries');
   const [rows, setRows] = useState<Row[]>(
@@ -53,7 +53,7 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
   const tipC = tip.trim() ? parseDollars(tip) : 0;
   const total = items.reduce((t, r) => t + (r.cents ?? 0), 0) + (taxC ?? 0) + (tipC ?? 0);
   const people = group.members.filter((m) => among.includes(m.id) || m.id === group.me);
-  const ok = !!ownerName.trim() && !!title.trim() && items.length > 0 && !badRow && taxC !== null && tipC !== null && people.length >= 2 && !saving;
+  const ok = !!meMember && !!ownerName.trim() && !!title.trim() && items.length > 0 && !badRow && taxC !== null && tipC !== null && people.length >= 2 && !saving;
 
   const setRow = (key: number, patch: Partial<Row>) => {
     setRows((rs) => {
