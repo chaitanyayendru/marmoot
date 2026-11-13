@@ -94,7 +94,9 @@ test('the request asks for JSON with the photo attached', () => {
   const req = L.geminiReceiptRequest('QUJD', 'image/png');
   assert.equal(req.contents[0].parts[1].inlineData.mimeType, 'image/png');
   assert.equal(req.generationConfig.responseMimeType, 'application/json');
-  assert.equal(req.generationConfig.responseSchema.properties.items.type, 'ARRAY');
+  assert.equal(req.generationConfig.responseJsonSchema.properties.items.type, 'array');
+  assert.equal('temperature' in req.generationConfig, false);
+  assert.deepEqual(plain(L.suggestedModels('models/gemini-2.5-flash is no longer available. Please use models/gemini-3.8-flash.', 'gemini-2.5-flash')), ['gemini-3.8-flash']);
 });
 
 test('the Splitwise expense: payer paid it all, everyone owes their total, the sums match', () => {

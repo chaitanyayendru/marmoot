@@ -175,7 +175,12 @@ export function makeHarness(baseUrl: string): Harness {
       fetch: (url: string, params: { method?: string; headers?: Record<string, string>; payload?: unknown }) => {
         if (url.startsWith('https://generativelanguage.googleapis.com/')) {
           if (params.headers?.['x-goog-api-key'] !== 'gemini-test-key') return response(400, { error: { message: 'API key not valid. Please pass a valid API key.' } });
+          // Like Google today: older models are closed to new keys, with a pointer to the replacement.
+          if (url.includes('/models/gemini-2.5-flash:')) {
+            return response(404, { error: { message: 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements.', status: 'NOT_FOUND' } });
+          }
           const body = JSON.parse(String(params.payload));
+          if (body.generationConfig?.temperature !== undefined) return response(400, { error: { message: 'temperature is not supported by this model' } });
           geminiCalls.push(body);
           if (!body.contents?.[0]?.parts?.[1]?.inlineData?.data) return response(400, { error: { message: 'no image' } });
           return response(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(FAKE_RECEIPT) }] } }] });

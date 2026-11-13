@@ -18,7 +18,7 @@ import {
   type State,
 } from './model.ts';
 import { payAction } from './payments.ts';
-import { parseReceipt, receiptRequest } from './receipt.ts';
+import { parseReceipt, readReceipt, receiptRequest, suggestedModels } from './receipt.ts';
 import { groupShareText, sheetTotals, splitwiseText } from './sheet.ts';
 import type { SheetData } from './api.ts';
 import { sampleGroup } from './sample.ts';
@@ -198,10 +198,56 @@ describe('receipt scanning', () => {
     expect(() => parseReceipt({ candidates: [{ content: { parts: [{ text: 'not json' }] } }] })).toThrow("didn't return");
   });
 
-  it('asks Gemini for JSON that follows a schema', () => {
+  it('asks Gemini for JSON that follows a schema, with no sampling settings', () => {
     const req = receiptRequest('AAAA', 'image/jpeg');
     expect(req.generationConfig.responseMimeType).toBe('application/json');
+    expect(req.generationConfig).not.toHaveProperty('temperature');
+    expect(req.generationConfig.responseJsonSchema?.properties.items.type).toBe('array');
     expect(req.contents[0]!.parts[1]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: 'AAAA' } });
+    expect(receiptRequest('AAAA', 'image/jpeg', false).generationConfig).not.toHaveProperty('responseJsonSchema');
+  });
+
+  // A pretend Gemini: answers per model, and records which models were asked.
+  function gemini(answers: Record<string, (body: { generationConfig: Record<string, unknown> }) => [number, unknown]>) {
+    const asked: string[] = [];
+    const fetchImpl = (async (url: string, init: { body: string; headers: Record<string, string> }) => {
+      const model = /models\/([^:]+):/.exec(url)![1]!;
+      asked.push(model);
+      expect(init.headers['x-goog-api-key']).toBe('k');
+      const [status, body] = answers[model]?.(JSON.parse(init.body)) ?? [404, { error: { message: `models/${model} is not found` } }];
+      return new Response(JSON.stringify(body), { status });
+    }) as unknown as typeof fetch;
+    return { asked, fetchImpl };
+  }
+  const okAnswer = (): [number, unknown] => [200, answer({ items: [{ name: 'Milk', price: 3.49 }], total: 3.49 })];
+
+  it("follows Google's replacement when a model is retired for new keys", async () => {
+    const g = gemini({
+      'gemini-2.5-flash': () => [404, { error: { message: 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-9.9-flash for the latest features.' } }],
+      'gemini-9.9-flash': okAnswer,
+    });
+    const r = await readReceipt('AAAA', 'k', g.fetchImpl, 'gemini-2.5-flash');
+    expect(r.items).toEqual([{ name: 'Milk', price: 349 }]);
+    expect(g.asked).toEqual(['gemini-2.5-flash', 'gemini-9.9-flash']);
+    expect(suggestedModels('use models/gemini-3.8-flash. Thanks', 'x')).toEqual(['gemini-3.8-flash']);
+  });
+
+  it('moves to Flash-Lite when the free limit is used up, and retries without a schema if one is refused', async () => {
+    const g = gemini({
+      'gemini-3.8-flash': () => [429, { error: { message: 'Resource exhausted' } }],
+      'gemini-3.5-flash-lite': (body) =>
+        body.generationConfig.responseJsonSchema ? [400, { error: { message: 'Invalid JSON payload received. Unknown name "responseJsonSchema"' } }] : okAnswer(),
+    });
+    const r = await readReceipt('AAAA', 'k', g.fetchImpl, null);
+    expect(r.items).toHaveLength(1);
+    expect(g.asked).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite']);
+  });
+
+  it('explains a bad key and a spent quota in plain words', async () => {
+    const bad = gemini({ 'gemini-3.8-flash': () => [400, { error: { message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } }] });
+    await expect(readReceipt('AAAA', 'k', bad.fetchImpl, null)).rejects.toThrow("didn't accept this key");
+    const spent = gemini({ 'gemini-3.8-flash': () => [429, {}], 'gemini-3.5-flash-lite': () => [429, {}] });
+    await expect(readReceipt('AAAA', 'k', spent.fetchImpl, null)).rejects.toThrow('free limit');
   });
 });
 

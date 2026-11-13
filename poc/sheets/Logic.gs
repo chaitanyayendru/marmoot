@@ -120,30 +120,42 @@ var RECEIPT_PROMPT = [
   'All amounts are plain numbers in the receipt currency, like 3.49.'
 ].join(' ');
 
-/** The generateContent request body for one receipt photo. */
+/** Models to try, best first; Google retires models for new keys, so scanReceipt also follows the replacement an error names. */
+var GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+
+/** Model ids an error message points to, like "please use models/gemini-3.8-flash". */
+function suggestedModels(message, current) {
+  var out = [];
+  String(message || '').replace(/models\/([A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])/g, function (_, m) {
+    if (m !== current && out.indexOf(m) < 0) out.push(m);
+    return _;
+  });
+  return out;
+}
+
+/** The generateContent request body for one receipt photo. Newer models reject sampling settings, so there are none. */
 function geminiReceiptRequest(base64, mimeType) {
   return {
     contents: [{ parts: [{ text: RECEIPT_PROMPT }, { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }] }],
     generationConfig: {
-      temperature: 0,
       responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
+      responseJsonSchema: {
+        type: 'object',
         properties: {
-          merchant: { type: 'STRING' },
-          currency: { type: 'STRING' },
+          merchant: { type: 'string' },
+          currency: { type: 'string' },
           items: {
-            type: 'ARRAY',
+            type: 'array',
             items: {
-              type: 'OBJECT',
-              properties: { name: { type: 'STRING' }, quantity: { type: 'NUMBER' }, price: { type: 'NUMBER' } },
+              type: 'object',
+              properties: { name: { type: 'string' }, quantity: { type: 'number' }, price: { type: 'number' } },
               required: ['name', 'price']
             }
           },
-          subtotal: { type: 'NUMBER' },
-          tax: { type: 'NUMBER' },
-          tip: { type: 'NUMBER' },
-          total: { type: 'NUMBER' }
+          subtotal: { type: 'number' },
+          tax: { type: 'number' },
+          tip: { type: 'number' },
+          total: { type: 'number' }
         },
         required: ['items']
       }
@@ -262,6 +274,6 @@ function whatsappShareUrl(text) {
 /** Node test hook; Apps Script has no `module`. */
 if (typeof module !== 'undefined') {
   module.exports = { parseMoney: parseMoney, centsToDecimal: centsToDecimal, usd: usd, allocate: allocate, computeShares: computeShares,
-    geminiReceiptRequest: geminiReceiptRequest, parseReceiptResponse: parseReceiptResponse, splitwiseExpenseForm: splitwiseExpenseForm,
+    geminiReceiptRequest: geminiReceiptRequest, suggestedModels: suggestedModels, GEMINI_MODELS: GEMINI_MODELS, parseReceiptResponse: parseReceiptResponse, splitwiseExpenseForm: splitwiseExpenseForm,
     splitwiseErrors: splitwiseErrors, splitwiseName: splitwiseName, groupMessage: groupMessage, whatsappShareUrl: whatsappShareUrl };
 }

@@ -25,34 +25,65 @@ export const RECEIPT_PROMPT = [
   'All amounts are plain numbers in the receipt currency, like 3.49.',
 ].join(' ');
 
-export const GEMINI_MODEL = 'gemini-2.5-flash';
+/**
+ * Models to try, best first. Google retires models for new keys without notice
+ * ("no longer available to new users"), so the app also follows the replacement the
+ * error names, and remembers whichever model last worked on this phone. Flash-Lite
+ * comes second because its free tier allows many more requests a day.
+ */
+export const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+const MODEL_KEY = 'marmoot:gemini-model';
 
-export function receiptRequest(base64: string, mimeType: string) {
+function rememberedModel(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(MODEL_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberModel(model: string) {
+  try {
+    globalThis.localStorage?.setItem(MODEL_KEY, model);
+  } catch {
+    // Not saved; the next scan finds it again.
+  }
+}
+
+/** The generateContent body. Newer models reject sampling settings, so there are none. */
+export function receiptRequest(base64: string, mimeType: string, withSchema = true) {
   return {
     contents: [{ parts: [{ text: RECEIPT_PROMPT }, { inlineData: { mimeType, data: base64 } }] }],
     generationConfig: {
-      temperature: 0,
       responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
-        properties: {
-          merchant: { type: 'STRING' },
-          items: {
-            type: 'ARRAY',
+      ...(withSchema && {
+        responseJsonSchema: {
+          type: 'object',
+          properties: {
+            merchant: { type: 'string' },
             items: {
-              type: 'OBJECT',
-              properties: { name: { type: 'STRING' }, quantity: { type: 'NUMBER' }, price: { type: 'NUMBER' } },
-              required: ['name', 'price'],
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { name: { type: 'string' }, quantity: { type: 'number' }, price: { type: 'number' } },
+                required: ['name', 'price'],
+              },
             },
+            tax: { type: 'number' },
+            tip: { type: 'number' },
+            total: { type: 'number' },
           },
-          tax: { type: 'NUMBER' },
-          tip: { type: 'NUMBER' },
-          total: { type: 'NUMBER' },
+          required: ['items'],
         },
-        required: ['items'],
-      },
+      }),
     },
   };
+}
+
+/** Model ids an error message points to, like "please use models/gemini-3.8-flash". */
+export function suggestedModels(message: string, current: string): string[] {
+  const found = [...message.matchAll(/models\/([A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])/g)].map((m) => m[1]!);
+  return [...new Set(found)].filter((m) => m !== current);
 }
 
 /** A number or "3.49" -> cents, or null. */
@@ -132,19 +163,64 @@ export function shrinkPhoto(file: File): Promise<string> {
 
 /** Send the photo to Gemini with the owner's key and read the answer. */
 export async function scanReceipt(file: File, apiKey: string, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<ScannedReceipt> {
-  const base64 = await shrinkPhoto(file);
-  let res: Response;
-  try {
-    res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(receiptRequest(base64, 'image/jpeg')),
-    });
-  } catch {
-    throw new Error("Couldn't reach Gemini. Check your connection.");
+  return readReceipt(await shrinkPhoto(file), apiKey, fetchImpl);
+}
+
+/**
+ * Ask Gemini to read a receipt (JPEG, base64). Tries the model that worked last time,
+ * then the list above, following any replacement Google names, and falls back to
+ * Flash-Lite when the free daily limit of a model is used up.
+ */
+export async function readReceipt(
+  base64: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = (...a) => fetch(...a),
+  first: string | null = rememberedModel(),
+): Promise<ScannedReceipt> {
+  const queue = [...new Set([first, ...GEMINI_MODELS].filter((m): m is string => !!m))];
+  const tried = new Set<string>();
+  let withSchema = true;
+  let quota: Error | null = null;
+  let lastProblem = '';
+  while (queue.length && tried.size < 6) {
+    const model = queue.shift()!;
+    const attempt = `${model}|${withSchema}`;
+    if (tried.has(attempt)) continue;
+    tried.add(attempt);
+    let res: Response;
+    try {
+      res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(receiptRequest(base64, 'image/jpeg', withSchema)),
+      });
+    } catch {
+      throw new Error("Couldn't reach Gemini. Check your connection.");
+    }
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; status?: string } };
+    if (res.ok) {
+      rememberModel(model);
+      return parseReceipt(body);
+    }
+    const message = body.error?.message ?? `answered ${res.status}`;
+    if (res.status === 429) {
+      quota = new Error("Gemini's free limit is used up for now. Try again in a minute, or tomorrow if it's the daily limit.");
+      continue;
+    }
+    if (res.status === 404 || /no longer available|not found|is not supported/i.test(message)) {
+      queue.unshift(...suggestedModels(message, model));
+      lastProblem = message;
+      continue;
+    }
+    if (res.status === 400 && withSchema && /schema|unknown name|invalid json payload/i.test(message)) {
+      withSchema = false;
+      queue.unshift(model);
+      continue;
+    }
+    if (/api key not valid|api_key_invalid|permission_denied/i.test(`${message} ${body.error?.status ?? ''}`)) {
+      throw new Error("Gemini didn't accept this key. Check it in Settings, or make a new one at aistudio.google.com/apikey.");
+    }
+    throw new Error(`Gemini: ${message}`);
   }
-  const body = await res.json().catch(() => ({}));
-  if (res.status === 429) throw new Error("Gemini's free limit is used up for now. Wait a minute and try again.");
-  if (!res.ok) throw new Error(`Gemini: ${(body as { error?: { message?: string } })?.error?.message ?? `answered ${res.status}`}`);
-  return parseReceipt(body);
+  throw quota ?? new Error(`No Gemini model worked with this key. ${lastProblem}`.trim());
 }

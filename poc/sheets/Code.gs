@@ -182,20 +182,40 @@ function scanReceipt(key, base64, mimeType) {
   assertOwner_(key);
   var apiKey = prop_('GEMINI_API_KEY');
   if (!apiKey) throw new Error('Add your Gemini API key in Settings to scan receipts, or type the items in.');
-  var model = prop_('GEMINI_MODEL') || 'gemini-2.5-flash';
-  var res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': apiKey },
-    payload: JSON.stringify(geminiReceiptRequest(base64, mimeType)),
-    muteHttpExceptions: true
-  });
-  var body = {};
-  try { body = JSON.parse(res.getContentText() || '{}'); } catch (e) { /* not JSON */ }
-  var code = res.getResponseCode();
-  if (code === 429) throw new Error('Gemini\'s free limit is used up for now. Wait a minute and try again.');
-  if (code !== 200) throw new Error('Gemini: ' + ((body.error && body.error.message) || 'answered ' + code));
-  return parseReceiptResponse(body);
+  var saved = prop_('GEMINI_MODEL');
+  var queue = (saved ? [saved] : []).concat(GEMINI_MODELS.filter(function (m) { return m !== saved; }));
+  var tried = {};
+  var quota = false;
+  var lastProblem = '';
+  while (queue.length) {
+    var model = queue.shift();
+    if (tried[model]) continue;
+    tried[model] = true;
+    var res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },
+      payload: JSON.stringify(geminiReceiptRequest(base64, mimeType)),
+      muteHttpExceptions: true
+    });
+    var body = {};
+    try { body = JSON.parse(res.getContentText() || '{}'); } catch (e) { /* not JSON */ }
+    var code = res.getResponseCode();
+    var message = (body.error && body.error.message) || 'answered ' + code;
+    if (code === 200) {
+      if (model !== saved) props_().setProperty('GEMINI_MODEL', model);
+      return parseReceiptResponse(body);
+    }
+    if (code === 429) { quota = true; continue; }
+    if (code === 404 || /no longer available|not found|is not supported/i.test(message)) {
+      queue = suggestedModels(message, model).concat(queue);
+      lastProblem = message;
+      continue;
+    }
+    throw new Error('Gemini: ' + message);
+  }
+  if (quota) throw new Error('Gemini\'s free limit is used up for now. Try again in a minute, or tomorrow if it\'s the daily limit.');
+  throw new Error('No Gemini model worked with this key. ' + lastProblem);
 }
 
 // ---------------------------------------------------------------- owner: create a bill sheet

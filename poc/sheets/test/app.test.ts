@@ -119,6 +119,14 @@ test('a roommate unticks onions and taps Done; the owner sees it; Splitwise gets
   assert.equal(plain(h.ctx.ownerBootstrap('dev').bills)[0].title, 'Costco');
 });
 
+test('a retired Gemini model is replaced by the one Google names, and remembered', () => {
+  const h = ready();
+  h.props.set('GEMINI_MODEL', 'gemini-2.5-flash');
+  const scanned = h.ctx.scanReceipt('dev', 'aGVsbG8=', 'image/jpeg');
+  assert.ok(scanned.items.length > 0);
+  assert.equal(h.props.get('GEMINI_MODEL'), 'gemini-3.8-flash');
+});
+
 test('settings, bad keys and a broken layout give plain answers', () => {
   const h = ready();
   h.props.set('GEMINI_API_KEY', 'wrong');
