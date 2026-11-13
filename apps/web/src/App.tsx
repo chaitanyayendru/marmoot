@@ -60,7 +60,7 @@ export function App() {
   const m = /^#\/g\/([^/]+)(?:\/(settle|people|game|sheet)(?:\/([^/]+))?)?$/.exec(hash);
   const group = m ? state.groups.find((g) => g.id === m[1]) : undefined;
   if (m && group) {
-    if (m[2] === 'sheet' && m[3] === 'new') return <NewSheet group={group} dispatch={dispatch} />;
+    if (m[2] === 'sheet' && m[3] === 'new') return <NewSheet group={group} dispatch={dispatch} geminiKey={state.geminiKey} />;
     if (m[2] === 'sheet' && m[3]) {
       const ref = group.sheets?.find((sh) => sh.id === m[3]);
       if (ref && api) return <SheetView api={api} group={group} sheetRef={ref} dispatch={dispatch} />;

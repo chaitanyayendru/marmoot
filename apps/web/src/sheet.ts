@@ -6,6 +6,7 @@
 import { sheetShares, type SheetInput, type SheetResult } from '@marmoot/core';
 import type { SheetData, SheetEvent, SheetPerson } from './api.ts';
 import type { ExpenseItem, SheetRef } from './model.ts';
+import { usd } from './money.ts';
 import { waNumber } from './whatsapp.ts';
 
 export function sheetInput(d: SheetData): SheetInput {
@@ -111,4 +112,37 @@ export function sheetExpense(ref: SheetRef, d: SheetData, totals: SheetResult, i
     paidBy: owner.memberId,
     split: { method: 'exact', amounts },
   };
+}
+
+/**
+ * One message for the group chat: what the bill is, and each person's own link.
+ * Each link only lets that person change their own column.
+ */
+export function groupShareText(d: SheetData, totals: SheetResult, link: (token: string) => string): string {
+  const owner = d.people.find((p) => p.is_owner);
+  const others = d.people.filter((p) => !p.is_owner && p.token && !p.out_of_bill);
+  const lines = [
+    `${owner ? first(owner.name) : 'I'} shared a bill: ${d.sheet.title}, ${usd(totals.total)} (${d.items.length} item${d.items.length === 1 ? '' : 's'}).`,
+    d.sheet.default_in
+      ? "Open your link and untick anything you weren't part of. If you don't, you're in for everything."
+      : 'Open your link and tick what you had.',
+  ];
+  if (d.sheet.note) lines.push(d.sheet.note);
+  lines.push('');
+  for (const p of others) lines.push(`${first(p.name)}: ${link(p.token!)}`);
+  return lines.join('\n');
+}
+
+/**
+ * The amounts to type into Splitwise by hand (Add expense, then "split by exact
+ * amounts"), so no Splitwise subscription or API key is needed.
+ */
+export function splitwiseText(d: SheetData, totals: SheetResult): string {
+  const owner = d.people.find((p) => p.is_owner);
+  const lines = [`${d.sheet.title}: ${usd(totals.total)}, paid by ${owner?.name ?? 'me'}`, 'Split by exact amounts:'];
+  for (const p of d.people) {
+    const t = totals.totals.get(p.id)?.total ?? 0;
+    if (t > 0 || p.is_owner) lines.push(`${p.name}: ${usd(t)}`);
+  }
+  return lines.join('\n');
 }

@@ -15,7 +15,7 @@ The code is four files plus a settings file, in this folder.
 ### 1. Get two free keys
 
 - **Gemini** (reads the receipt): open [aistudio.google.com/apikey](https://aistudio.google.com/apikey), click **Create API key**, and copy it.
-- **Splitwise:** open [secure.splitwise.com/apps](https://secure.splitwise.com/apps) and click **Register your application**. Any name and homepage will do, for example `Marmoot` and `https://example.com`. On the app's page, copy the **API key**.
+- **Splitwise (optional):** Splitwise now allows API access only with a Splitwise Pro subscription. Without it, skip this key: type your roommates' names as the default members instead, and enter the totals in Splitwise yourself. The [web app](../../docs/FREE-HOSTING.md) does the same job with no subscription and copies the exact amounts for you. With Pro, open [secure.splitwise.com/apps](https://secure.splitwise.com/apps) and click **Register your application**. Any name and homepage will do, for example `Marmoot` and `https://example.com`. On the app's page, copy the **API key**.
 
 Keep both private. They go into your own script's settings, and roommates never see them.
 

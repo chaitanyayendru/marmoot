@@ -12,7 +12,11 @@ export function load(): State {
     const raw = globalThis.localStorage?.getItem(KEY);
     if (!raw) return { groups: [], theme: 'system' };
     const parsed = JSON.parse(raw) as Partial<State>;
-    return { groups: Array.isArray(parsed.groups) ? parsed.groups : [], theme: parsed.theme ?? 'system' };
+    return {
+      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+      theme: parsed.theme ?? 'system',
+      geminiKey: typeof parsed.geminiKey === 'string' ? parsed.geminiKey : undefined,
+    };
   } catch {
     return { groups: [], theme: 'system' };
   }

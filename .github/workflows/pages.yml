@@ -1,0 +1,53 @@
+name: Deploy to GitHub Pages
+
+# Builds the web app and publishes it at https://<user>.github.io/marmoot/ on every
+# push to main. One-time setup: repo Settings > Pages > Source: "GitHub Actions".
+# GitHub Pages is free for public repos; a private repo needs a paid GitHub plan.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          # Where shared bill sheets live. The publishable key is meant to be public
+          # (it ships inside every copy of the app); the database's own rules decide
+          # what it can do. Override either with a repo variable of the same name.
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || 'https://crayupizosflqzzweteb.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || 'sb_publishable_y_ep4Ajycgtk2XhRIJv71g_BggPRsm8' }}
+          # Set the repo variable VITE_WHATSAPP_SEND to 1 once Marmoot's own WhatsApp number works.
+          VITE_WHATSAPP_SEND: ${{ vars.VITE_WHATSAPP_SEND || '' }}
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

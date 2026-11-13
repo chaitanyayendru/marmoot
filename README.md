@@ -2,7 +2,7 @@
 
 Split the bills you share (groceries, rent, utilities, trips, dinners, game nights) and settle up in the fewest payments, using the payment apps people actually have.
 
-For a shop with many items, send a **bill sheet**: Marmoot messages each person on WhatsApp from its own number, with a link to their part. Each person unticks what they weren't part of (tomatoes yes, onions no). You see who's answered, and the totals land in the group when you close it.
+For a shop with many items, make a **bill sheet**: scan the receipt, then post one WhatsApp message in your group with each person's own link. Each person unticks what they weren't part of (tomatoes yes, onions no). You see who's answered, and the totals land in the group when you close it, ready to copy into Splitwise as exact amounts.
 
 **Architecture plan:** [Marmoot — Architecture Plan](https://claude.ai/artifact/SSLhp5ZqqQxMoLDa9Hd8Bz)
 
@@ -16,7 +16,7 @@ For a shop with many items, send a **bill sheet**: Marmoot messages each person 
 | `supabase/functions` | Edge Functions: `send-bill-alerts` sends the WhatsApp template from Marmoot's number; `whatsapp-webhook` records delivered, read and failed. |
 | `supabase/local` | `npm run local`: the whole server on your computer (Postgres, PostgREST, the functions, a pretend WhatsApp inbox) plus the app, for trying bill sheets with no accounts. |
 | `supabase/tests` | Database tests against a throwaway Postgres, including SQL vs TypeScript parity on random splits, due dates and poker nights, and bill sheet permissions. |
-| `docs` | [Getting started](docs/GETTING-STARTED.md) on Windows, and [setting up sharing](docs/SHARING-SETUP.md) with Supabase, Cloudflare Pages and WhatsApp. |
+| `docs` | [Getting started](docs/GETTING-STARTED.md) on Windows, the [free setup](docs/FREE-HOSTING.md) on GitHub Pages and Supabase, and [Marmoot's own WhatsApp number](docs/SHARING-SETUP.md). |
 
 ## Run it
 
@@ -39,10 +39,12 @@ The database tests start a throwaway Postgres 16+ from `PG_BIN`, `pg_config` on 
 
 ## Deploying for free
 
-[docs/SHARING-SETUP.md](docs/SHARING-SETUP.md) has every step:
-- **Supabase** (free plan) for the database and functions.
-- **Cloudflare Pages** for the web app (`npm run deploy:web`).
-- **WhatsApp:** Meta's free test number for up to 5 people.
+[docs/FREE-HOSTING.md](docs/FREE-HOSTING.md) has every step, with no subscriptions:
+- **GitHub Pages** for the web app, built on every push (`.github/workflows/pages.yml`).
+- **Supabase** (free plan) for the bill sheets.
+- **Gemini** (free key, kept on the phone) for reading receipts.
+
+Optional, in [docs/SHARING-SETUP.md](docs/SHARING-SETUP.md): Cloudflare Pages instead of GitHub Pages (works with a private repo), and messages from Marmoot's own WhatsApp number (Meta's free test number covers 5 people).
 
 Before inviting more people, set up the nightly backup (the free Supabase plan has none), and require sign-in to create sheets.
 

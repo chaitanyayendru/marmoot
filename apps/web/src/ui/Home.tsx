@@ -100,9 +100,39 @@ export function Home({ state, dispatch, saved }: { state: State; dispatch: Dispa
               </label>
             ))}
           </fieldset>
+          <GeminiKeyField value={state.geminiKey ?? ''} onSave={(key) => dispatch({ type: 'setGeminiKey', key })} />
           <p className="fine">Your groups are stored on this device until accounts arrive.</p>
         </Sheet>
       )}
     </main>
+  );
+}
+
+/** The owner's Gemini key for reading receipts, kept on this device only. */
+function GeminiKeyField({ value, onSave }: { value: string; onSave: (key: string) => void }) {
+  const [draft, setDraft] = useState('');
+  const [saved, setSaved] = useState(false);
+  return (
+    <form
+      className="field"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(draft);
+        setDraft('');
+        setSaved(true);
+      }}
+    >
+      <span>Gemini API key, for scanning receipts</span>
+      <div className="add-row">
+        <input type="password" autoComplete="off" value={draft} onChange={(e) => { setDraft(e.target.value); setSaved(false); }} placeholder={value ? 'Saved. Paste a new one to replace it.' : 'Paste your key'} />
+        <button className="pill" disabled={!draft.trim()}>Save</button>
+      </div>
+      <span className="fine">
+        {saved ? 'Saved on this device. ' : ''}Free from aistudio.google.com/apikey. It stays on this phone; Marmoot's server never sees it.
+        {value && !saved && (
+          <> <button type="button" className="link" onClick={() => onSave('')}>Remove it</button></>
+        )}
+      </span>
+    </form>
   );
 }

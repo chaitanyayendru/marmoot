@@ -18,6 +18,9 @@ import {
   type State,
 } from './model.ts';
 import { payAction } from './payments.ts';
+import { parseReceipt, receiptRequest } from './receipt.ts';
+import { groupShareText, sheetTotals, splitwiseText } from './sheet.ts';
+import type { SheetData } from './api.ts';
 import { sampleGroup } from './sample.ts';
 import { expenseText, planText, reminderText, waLink, waNumber } from './whatsapp.ts';
 
@@ -157,5 +160,81 @@ describe('one-tap WhatsApp', () => {
     const t = { from: 'ravi', to: 'meera', amount: 3500, rail: 'paypal' };
     expect(payAction(t, M('meera', { paypal: 'https://paypal.me/MeeraK' }), 'x')).toMatchObject({ href: 'https://paypal.me/MeeraK/35.00' });
     expect(transferKey(t)).toBe('ravi>meera:3500');
+  });
+});
+
+describe('receipt scanning', () => {
+  const answer = (obj: unknown) => ({ candidates: [{ content: { parts: [{ text: '```json\n' + JSON.stringify(obj) + '\n```' }] } }] });
+
+  it('reads items, folds discounts into the item above and checks the total', () => {
+    const r = parseReceipt(
+      answer({
+        merchant: 'Costco',
+        items: [
+          { name: 'Tomatoes', price: 4.99 },
+          { name: 'Coupon', price: -1 },
+          { name: 'Eggs', quantity: 2, price: 9.58 },
+          { name: '', price: 3 },
+        ],
+        tax: 0.8,
+        tip: 0,
+        total: 14.37,
+      }),
+    );
+    expect(r.merchant).toBe('Costco');
+    expect(r.items).toEqual([
+      { name: 'Tomatoes', price: 399 },
+      { name: 'Eggs x2', price: 958 },
+    ]);
+    expect(r.tax).toBe(80);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('warns when the items do not add up, and explains an empty answer', () => {
+    const r = parseReceipt(answer({ items: [{ name: 'Milk', price: '3.49' }], total: 5 }));
+    expect(r.items).toEqual([{ name: 'Milk', price: 349 }]);
+    expect(r.warnings[0]).toContain('$3.49');
+    expect(() => parseReceipt({ promptFeedback: { blockReason: 'SAFETY' } })).toThrow('SAFETY');
+    expect(() => parseReceipt({ candidates: [{ content: { parts: [{ text: 'not json' }] } }] })).toThrow("didn't return");
+  });
+
+  it('asks Gemini for JSON that follows a schema', () => {
+    const req = receiptRequest('AAAA', 'image/jpeg');
+    expect(req.generationConfig.responseMimeType).toBe('application/json');
+    expect(req.contents[0]!.parts[1]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: 'AAAA' } });
+  });
+});
+
+describe('sharing a bill without subscriptions', () => {
+  const data = {
+    sheet: { title: 'Costco', note: null, tax_cents: 0, tip_cents: 0, default_in: true, status: 'open' },
+    people: [
+      { id: 'o', name: 'Chai Y', is_owner: true, token: 'own', out_of_bill: false },
+      { id: 'a', name: 'Asha', is_owner: false, token: 'ta', out_of_bill: false },
+      { id: 'b', name: 'Ben', is_owner: false, token: 'tb', out_of_bill: false },
+      { id: 'c', name: 'Cy', is_owner: false, token: 'tc', out_of_bill: true },
+    ],
+    items: [
+      { id: 'i1', name: 'Tomatoes', price_cents: 600 },
+      { id: 'i2', name: 'Onions', price_cents: 400 },
+    ],
+    choices: [{ item_id: 'i2', person_id: 'a', is_in: false }],
+    events: [],
+  } as unknown as SheetData;
+
+  it('writes one group message with each person their own link', () => {
+    const text = groupShareText(data, sheetTotals(data), (t) => `https://x.test/?s=${t}`);
+    expect(text).toContain('Chai shared a bill: Costco, $10.00 (2 items).');
+    expect(text).toContain('Asha: https://x.test/?s=ta');
+    expect(text).toContain('Ben: https://x.test/?s=tb');
+    expect(text).not.toContain('Cy:');
+    expect(text).not.toContain('own');
+  });
+
+  it('lists exact amounts for Splitwise that add up to the bill', () => {
+    const totals = sheetTotals(data);
+    const text = splitwiseText(data, totals);
+    // Tomatoes split 3 ways (Cy is out), onions between Chai and Ben.
+    expect(text).toBe(['Costco: $10.00, paid by Chai Y', 'Split by exact amounts:', 'Chai Y: $4.00', 'Asha: $2.00', 'Ben: $4.00'].join('\n'));
   });
 });

@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState, type Dispatch } from 'react';
-import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
+import { Camera, ChevronLeft, Plus, Trash2 } from 'lucide-react';
 import { go } from '../App.tsx';
 import { api } from '../apiClient.ts';
 import { ApiError } from '../api.ts';
 import { parseDollars, usd } from '../money.ts';
 import { CATEGORIES, today, type Action, type Category, type Group } from '../model.ts';
+import { scanReceipt } from '../receipt.ts';
 import { e164 } from '../sheet.ts';
 import { CategoryIcon, Notice } from './bits.tsx';
 
@@ -20,7 +21,7 @@ export function prefillSheet(p: NonNullable<typeof prefill>) {
   prefill = p;
 }
 
-export function NewSheet({ group, dispatch }: { group: Group; dispatch: Dispatch<Action> }) {
+export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatch: Dispatch<Action>; geminiKey?: string }) {
   const start = useRef(prefill);
   prefill = null;
   const s = start.current;
@@ -39,6 +40,9 @@ export function NewSheet({ group, dispatch }: { group: Group; dispatch: Dispatch
   const [among, setAmong] = useState<string[]>(s?.among.length ? s.among : group.members.map((m) => m.id));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState<{ tone: 'info' | 'warn'; text: string } | null>(null);
+  const photo = useRef<HTMLInputElement>(null);
 
   const items = useMemo(
     () => rows.filter((r) => r.name.trim() || r.price.trim()).map((r) => ({ ...r, cents: parseDollars(r.price) })),
@@ -59,6 +63,32 @@ export function NewSheet({ group, dispatch }: { group: Group; dispatch: Dispatch
       return next;
     });
   };
+
+  async function scan(file: File) {
+    if (!geminiKey) return;
+    setScanning(true);
+    setScanNote(null);
+    try {
+      const r = await scanReceipt(file, geminiKey);
+      if (r.items.length) {
+        const filled = r.items.map((it) => ({ key: nextKey.current++, name: it.name, price: (it.price / 100).toFixed(2) }));
+        setRows([...filled, { key: nextKey.current++, name: '', price: '' }]);
+        setTax(r.tax ? (r.tax / 100).toFixed(2) : '');
+        setTip(r.tip ? (r.tip / 100).toFixed(2) : '');
+        if (!title.trim() && r.merchant) setTitle(r.merchant);
+      }
+      setScanNote(
+        r.warnings.length
+          ? { tone: 'warn', text: r.warnings.join(' ') }
+          : { tone: 'info', text: `Found ${r.items.length} item${r.items.length === 1 ? '' : 's'}${r.total ? `, matching the receipt's ${usd(r.total)}` : ''}. Give them a quick look.` },
+      );
+    } catch (e) {
+      setScanNote({ tone: 'warn', text: e instanceof Error ? e.message : 'Scanning failed. Type the items in instead.' });
+    } finally {
+      setScanning(false);
+      if (photo.current) photo.current.value = '';
+    }
+  }
 
   async function create() {
     if (!api || !ok) return;
@@ -126,6 +156,17 @@ export function NewSheet({ group, dispatch }: { group: Group; dispatch: Dispatch
 
         <fieldset>
           <legend>Items</legend>
+          {geminiKey ? (
+            <>
+              <input ref={photo} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void scan(f); }} />
+              <button type="button" className="pill wide" disabled={scanning} onClick={() => photo.current?.click()}>
+                <Camera size={16} /> {scanning ? 'Reading the receipt…' : 'Scan a receipt'}
+              </button>
+            </>
+          ) : (
+            <p className="fine">To fill these from a photo, add a free Gemini key in Settings (the gear on the home screen).</p>
+          )}
+          {scanNote && <Notice tone={scanNote.tone}>{scanNote.text}</Notice>}
           <ol className="item-rows">
             {rows.map((r, i) => {
               const cents = r.price.trim() ? parseDollars(r.price) : null;

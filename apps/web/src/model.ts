@@ -160,6 +160,8 @@ export type Theme = 'system' | 'light' | 'dark';
 export interface State {
   groups: Group[];
   theme: Theme;
+  /** The owner's own Gemini key for reading receipts. Stays on this device. */
+  geminiKey?: string;
 }
 
 // ------------------------------------------------------------------ dates
@@ -205,6 +207,7 @@ export function catchUpRecurring(g: Group, todayStr: string, newId: () => string
 
 export type Action =
   | { type: 'setTheme'; theme: Theme }
+  | { type: 'setGeminiKey'; key: string }
   | { type: 'createGroup'; group: Group }
   | { type: 'deleteGroup'; group: string }
   | { type: 'renameGroup'; group: string; name: string }
@@ -293,6 +296,8 @@ export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'setTheme':
       return { ...s, theme: a.theme };
+    case 'setGeminiKey':
+      return { ...s, geminiKey: a.key.trim() || undefined };
     case 'createGroup':
       return { ...s, groups: [a.group, ...s.groups] };
     case 'deleteGroup':

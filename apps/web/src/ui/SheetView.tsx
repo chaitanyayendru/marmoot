@@ -1,15 +1,18 @@
 import { useMemo, useState, type Dispatch } from 'react';
-import { Check, ChevronLeft, Copy, Download, Minus, Send, Trash2 } from 'lucide-react';
+import { Check, ChevronLeft, ClipboardCopy, Copy, Download, MessageCircle, Minus, Send, Trash2 } from 'lucide-react';
 import { go } from '../App.tsx';
 import { ApiError, type Api, type SheetData, type SheetPerson } from '../api.ts';
 import { sheetLink } from '../apiClient.ts';
 import { parseDollars, usd } from '../money.ts';
 import { newId, type Action, type Group, type SheetRef } from '../model.ts';
-import { eventText, messageStatus, responseStatus, sheetExpense, sheetTotals } from '../sheet.ts';
+import { eventText, groupShareText, messageStatus, responseStatus, sheetExpense, sheetTotals, splitwiseText } from '../sheet.ts';
+import { waLink } from '../whatsapp.ts';
 import { Notice, Sheet } from './bits.tsx';
 import { useSheet, withChoice } from './useSheet.ts';
 
 const first = (name: string) => name.split(/\s+/)[0] ?? name;
+/** Sending through Marmoot's own WhatsApp number (Meta Cloud API) is optional; without it, the owner shares one message in the group. */
+const metaSend = import.meta.env.VITE_WHATSAPP_SEND === '1';
 const time = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group: Group; sheetRef: SheetRef; dispatch: Dispatch<Action> }) {
@@ -23,6 +26,8 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [closing, setClosing] = useState(false);
+  const [copiedText, setCopiedText] = useState<'group' | 'splitwise' | null>(null);
+  const [showText, setShowText] = useState<string | null>(null);
 
   const totals = useMemo(() => (data ? sheetTotals(data) : null), [data]);
   if (!data || !totals) {
@@ -70,6 +75,17 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
     }
   }
 
+  /** Copy a message; if the browser won't allow it, show the text to copy by hand. */
+  async function copyText(which: 'group' | 'splitwise', text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedText(which);
+      setTimeout(() => setCopiedText(null), 2000);
+    } catch {
+      setShowText(text);
+    }
+  }
+
   async function addItem() {
     const cents = parseDollars(newPrice);
     if (!newName.trim() || cents === null) return;
@@ -111,16 +127,23 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
       {error && <Notice tone="warn">{error}</Notice>}
 
       {open && (
-        <section className="send" aria-label="Send">
-          {notConfigured ? (
+        <section className="send" aria-label="Share">
+          <a className="pill primary wide" href={waLink(groupShareText(data, totals, sheetLink))} target="_blank" rel="noreferrer">
+            <MessageCircle size={16} /> Share in the WhatsApp group
+          </a>
+          <button className="pill wide" onClick={() => void copyText('group', groupShareText(data, totals, sheetLink))}>
+            <ClipboardCopy size={16} /> {copiedText === 'group' ? 'Copied' : 'Copy the message'}
+          </button>
+          <p className="fine">One message with everyone's own link. Each link only changes that person's column, and you'll see here who has opened it and what they picked.</p>
+          {metaSend && (notConfigured ? (
             <Notice tone="warn">
-              Marmoot's WhatsApp number isn't set up on the server yet (docs/SHARING-SETUP.md, step 3). Until then, copy each person's link below.
+              Marmoot's WhatsApp number isn't set up on the server yet (docs/SHARING-SETUP.md, step 3). Share in the group instead.
             </Notice>
           ) : (
-            <button className="pill primary wide" disabled={sending || unsent.length === 0} onClick={() => void send()}>
-              <Send size={16} /> {sending ? 'Sending…' : unsent.length ? `Send to ${unsent.map((p) => first(p.name)).join(', ')} on WhatsApp` : 'Everyone has the message'}
+            <button className="pill wide" disabled={sending || unsent.length === 0} onClick={() => void send()}>
+              <Send size={16} /> {sending ? 'Sending…' : unsent.length ? `Message ${unsent.map((p) => first(p.name)).join(', ')} from Marmoot's number` : 'Everyone has the message'}
             </button>
-          )}
+          ))}
           {sendNote && <Notice tone={sendNote.tone}>{sendNote.text}</Notice>}
         </section>
       )}
@@ -212,15 +235,22 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
                 <span className="avatar" aria-hidden="true">{p.name.slice(0, 1).toUpperCase()}</span>
                 <span className="row-main">
                   <span className="row-title">{p.name} <span className={`status ${st.tone}`}>{st.label}</span></span>
-                  <span className="row-sub">
-                    {messageStatus(p)}
-                    {p.alert_updated_at && p.alert_status !== 'no_phone' ? `, ${time(p.alert_updated_at)}` : ''}
-                    {p.phone ? ` · ${p.phone}` : ''}
-                  </span>
-                  {p.alert_status === 'failed' && p.alert_error && <span className="warn-text">{p.alert_error}</span>}
+                  {metaSend ? (
+                    <span className="row-sub">
+                      {messageStatus(p)}
+                      {p.alert_updated_at && p.alert_status !== 'no_phone' ? `, ${time(p.alert_updated_at)}` : ''}
+                      {p.phone ? ` · ${p.phone}` : ''}
+                    </span>
+                  ) : (
+                    <span className="row-sub">
+                      {p.out_of_bill ? 'Not part of this bill' : p.responded_at ? `Finished, ${time(p.responded_at)}` : p.viewed_at ? `Opened, ${time(p.viewed_at)}` : "Hasn't opened their link yet"}
+                      {` · owes ${usd(totals.totals.get(p.id)?.total ?? 0)}`}
+                    </span>
+                  )}
+                  {metaSend && p.alert_status === 'failed' && p.alert_error && <span className="warn-text">{p.alert_error}</span>}
                 </span>
                 <span className="row-actions">
-                  {open && p.has_phone && !notConfigured && p.alert_status === 'failed' && (
+                  {metaSend && open && p.has_phone && !notConfigured && p.alert_status === 'failed' && (
                     <button className="pill small" disabled={sending} onClick={() => void send([p.id], true)}>Resend</button>
                   )}
                   <button className="pill small" onClick={() => void copy(p)}>
@@ -250,6 +280,15 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
         </section>
       )}
 
+      <section aria-label="Splitwise" className="stack tight">
+        <h2 className="month">Splitwise</h2>
+        <pre className="copy-block num">{splitwiseText(data, totals)}</pre>
+        <button className="pill wide" disabled={totals.total <= 0} onClick={() => void copyText('splitwise', splitwiseText(data, totals))}>
+          <ClipboardCopy size={16} /> {copiedText === 'splitwise' ? 'Copied' : 'Copy for Splitwise'}
+        </button>
+        <p className="fine">In Splitwise: Add an expense in your group, enter {usd(totals.total)}, choose "split by exact amounts" and type these in. Wait until everyone has answered{answered < others.length ? ` (${others.length - answered} still to go)` : ''}.</p>
+      </section>
+
       {open && (
         <section className="stack tight">
           {!closing ? (
@@ -267,6 +306,12 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
             </div>
           )}
         </section>
+      )}
+
+      {showText && (
+        <Sheet title="Copy this" onClose={() => setShowText(null)}>
+          <textarea className="copy-block" readOnly rows={10} value={showText} onFocus={(e) => e.currentTarget.select()} />
+        </Sheet>
       )}
 
       {editing && (
