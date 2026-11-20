@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type Dispatch } from 'react';
-import { Camera, ChevronLeft, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type Dispatch } from 'react';
+import { Camera, ChevronLeft, ImageUp, Plus, Trash2 } from 'lucide-react';
 import { go } from '../App.tsx';
 import { api } from '../apiClient.ts';
 import { ApiError } from '../api.ts';
@@ -42,7 +42,9 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<{ tone: 'info' | 'warn'; text: string } | null>(null);
-  const photo = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
+  const upload = useRef<HTMLInputElement>(null);
+  const [dropping, setDropping] = useState(false);
 
   const items = useMemo(
     () => rows.filter((r) => r.name.trim() || r.price.trim()).map((r) => ({ ...r, cents: parseDollars(r.price) })),
@@ -86,9 +88,23 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
       setScanNote({ tone: 'warn', text: e instanceof Error ? e.message : 'Scanning failed. Type the items in instead.' });
     } finally {
       setScanning(false);
-      if (photo.current) photo.current.value = '';
+      if (camera.current) camera.current.value = '';
+      if (upload.current) upload.current.value = '';
     }
   }
+
+  // On a computer: paste a screenshot of the receipt anywhere on this page.
+  useEffect(() => {
+    if (!geminiKey) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/') || f.type === 'application/pdf');
+      if (!file || scanning) return;
+      e.preventDefault();
+      void scan(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
 
   async function create() {
     if (!api || !ok) return;
@@ -157,12 +173,33 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
         <fieldset>
           <legend>Items</legend>
           {geminiKey ? (
-            <>
-              <input ref={photo} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void scan(f); }} />
-              <button type="button" className="pill wide" disabled={scanning} onClick={() => photo.current?.click()}>
-                <Camera size={16} /> {scanning ? 'Reading the receipt…' : 'Scan a receipt'}
-              </button>
-            </>
+            <div
+              className={`scan-drop${dropping ? ' over' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setDropping(true); }}
+              onDragLeave={() => setDropping(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDropping(false);
+                const f = e.dataTransfer.files[0];
+                if (f && !scanning) void scan(f);
+              }}
+            >
+              <input ref={camera} type="file" accept="image/*" capture="environment" hidden aria-label="Take a photo of the receipt" onChange={(e) => { const f = e.target.files?.[0]; if (f) void scan(f); }} />
+              <input ref={upload} type="file" accept="image/*,application/pdf,.heic,.heif" hidden aria-label="Upload a receipt" onChange={(e) => { const f = e.target.files?.[0]; if (f) void scan(f); }} />
+              {scanning ? (
+                <p className="scan-busy">Reading the receipt…</p>
+              ) : (
+                <div className="two">
+                  <button type="button" className="pill" onClick={() => camera.current?.click()}>
+                    <Camera size={16} /> Take a photo
+                  </button>
+                  <button type="button" className="pill" onClick={() => upload.current?.click()}>
+                    <ImageUp size={16} /> Upload
+                  </button>
+                </div>
+              )}
+              <p className="fine">A photo, a screenshot or a PDF receipt. On a computer you can also drop or paste it here.</p>
+            </div>
           ) : (
             <p className="fine">To fill these from a photo, add a free Gemini key in Settings (the gear on the home screen).</p>
           )}

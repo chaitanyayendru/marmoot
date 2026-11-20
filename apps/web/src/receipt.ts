@@ -16,7 +16,7 @@ export interface ScannedReceipt {
 }
 
 export const RECEIPT_PROMPT = [
-  'This is a photo of a shopping or restaurant receipt.',
+  'This is a shopping or restaurant receipt: a photo, a screenshot or a PDF.',
   'List every purchased line item with the price printed for that line, after any discount on that line.',
   'If a discount or coupon line follows an item, subtract it from that item instead of listing it.',
   'Use short readable names; expand obvious store abbreviations (ORG BNLS CHKN BRST -> Organic boneless chicken breast).',
@@ -156,18 +156,56 @@ export function shrinkPhoto(file: File): Promise<string> {
       URL.revokeObjectURL(url);
       resolve(c.toDataURL('image/jpeg', 0.85).split(',')[1]!);
     };
-    img.onerror = () => reject(new Error("Couldn't open that photo. Try a JPEG or PNG."));
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Couldn't open that photo. Try a JPEG or PNG."));
+    };
     img.src = url;
   });
 }
 
-/** Send the photo to Gemini with the owner's key and read the answer. */
+/** Gemini reads these as they are, when the browser can't open them to shrink first (HEIC on a computer, say). */
+const SENT_AS_IS = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+/** Gemini takes up to about 20 MB in one request; base64 adds a third. */
+const MAX_AS_IS = 14 * 1024 * 1024;
+
+async function base64Of(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+const isPdf = (file: File) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+const looksLikeImage = (file: File) => file.type.startsWith('image/') || /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(file.name);
+
+/**
+ * A photo, screenshot or PDF, ready to send: photos are shrunk to a light JPEG when the
+ * browser can open them, and sent as they are otherwise; PDFs are sent as they are.
+ */
+export async function receiptFile(file: File): Promise<{ base64: string; mimeType: string }> {
+  if (isPdf(file)) {
+    if (file.size > MAX_AS_IS) throw new Error('That PDF is too big to read (over 14 MB). Try a photo or screenshot of it.');
+    return { base64: await base64Of(file), mimeType: 'application/pdf' };
+  }
+  if (!looksLikeImage(file)) throw new Error('That isn’t a photo or PDF. Pick a picture of the receipt, a screenshot, or a PDF.');
+  try {
+    return { base64: await shrinkPhoto(file), mimeType: 'image/jpeg' };
+  } catch (e) {
+    const type = file.type || (/\.hei[cf]$/i.test(file.name) ? 'image/heic' : '');
+    if (SENT_AS_IS.includes(type) && file.size <= MAX_AS_IS) return { base64: await base64Of(file), mimeType: type };
+    throw e;
+  }
+}
+
+/** Send the receipt to Gemini with the owner's key and read the answer. */
 export async function scanReceipt(file: File, apiKey: string, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<ScannedReceipt> {
-  return readReceipt(await shrinkPhoto(file), apiKey, fetchImpl);
+  const { base64, mimeType } = await receiptFile(file);
+  return readReceipt(base64, apiKey, fetchImpl, undefined, mimeType);
 }
 
 /**
- * Ask Gemini to read a receipt (JPEG, base64). Tries the model that worked last time,
+ * Ask Gemini to read a receipt (base64: a JPEG unless mimeType says otherwise). Tries the model that worked last time,
  * then the list above, following any replacement Google names, and falls back to
  * Flash-Lite when the free daily limit of a model is used up.
  */
@@ -176,6 +214,7 @@ export async function readReceipt(
   apiKey: string,
   fetchImpl: typeof fetch = (...a) => fetch(...a),
   first: string | null = rememberedModel(),
+  mimeType = 'image/jpeg',
 ): Promise<ScannedReceipt> {
   const queue = [...new Set([first, ...GEMINI_MODELS].filter((m): m is string => !!m))];
   const tried = new Set<string>();
@@ -192,7 +231,7 @@ export async function readReceipt(
       res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(receiptRequest(base64, 'image/jpeg', withSchema)),
+        body: JSON.stringify(receiptRequest(base64, mimeType, withSchema)),
       });
     } catch {
       throw new Error("Couldn't reach Gemini. Check your connection.");

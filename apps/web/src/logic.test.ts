@@ -18,7 +18,7 @@ import {
   type State,
 } from './model.ts';
 import { payAction } from './payments.ts';
-import { parseReceipt, readReceipt, receiptRequest, suggestedModels } from './receipt.ts';
+import { parseReceipt, readReceipt, receiptFile, receiptRequest, suggestedModels } from './receipt.ts';
 import { groupShareText, sheetTotals, splitwiseText } from './sheet.ts';
 import type { SheetData } from './api.ts';
 import { sampleGroup } from './sample.ts';
@@ -257,6 +257,16 @@ describe('receipt scanning', () => {
     const r = await readReceipt('AAAA', 'k', g.fetchImpl, null);
     expect(r.items).toHaveLength(1);
     expect(g.asked).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite']);
+  });
+
+  it('sends PDFs as they are, with their type', async () => {
+    let sent: { mimeType?: string } | undefined;
+    const g = gemini({ 'gemini-3.8-flash': (body) => { sent = (body as unknown as { contents: { parts: { inlineData?: { mimeType: string } }[] }[] }).contents[0]!.parts[1]!.inlineData; return okAnswer(); } });
+    await readReceipt('JVBERi0=', 'k', g.fetchImpl, null, 'application/pdf');
+    expect(sent?.mimeType).toBe('application/pdf');
+    const pdf = await receiptFile(new File([new Uint8Array([37, 80, 68, 70])], 'walmart.pdf', { type: 'application/pdf' }));
+    expect(pdf).toEqual({ base64: 'JVBERg==', mimeType: 'application/pdf' });
+    await expect(receiptFile(new File(['hi'], 'notes.txt', { type: 'text/plain' }))).rejects.toThrow('isn’t a photo or PDF');
   });
 
   it('explains a bad key and a spent quota in plain words', async () => {
