@@ -9,8 +9,13 @@ import type { ExpenseItem, SheetRef } from './model.ts';
 import { usd } from './money.ts';
 import { waNumber } from './whatsapp.ts';
 
+/** Who paid: the person marked, or the owner on sheets made before that was recorded. */
+export function payerOf(d: SheetData): SheetPerson {
+  return d.people.find((p) => p.paid) ?? d.people.find((p) => p.is_owner)!;
+}
+
 export function sheetInput(d: SheetData): SheetInput {
-  const owner = d.people.find((p) => p.is_owner)!;
+  const payer = payerOf(d);
   const choices = new Map<string, Map<string, boolean>>();
   for (const c of d.choices) {
     if (!choices.has(c.item_id)) choices.set(c.item_id, new Map());
@@ -19,7 +24,7 @@ export function sheetInput(d: SheetData): SheetInput {
   return {
     items: d.items.map((i) => ({ id: i.id, name: i.name, price: Number(i.price_cents) })),
     people: d.people.map((p) => p.id),
-    paidBy: owner.id,
+    paidBy: payer.id,
     tax: Number(d.sheet.tax_cents),
     tip: Number(d.sheet.tip_cents),
     defaultIn: d.sheet.default_in,
@@ -33,12 +38,17 @@ export function sheetTotals(d: SheetData): SheetResult {
 }
 
 /** Where a person is with the sheet, in words. */
-export function responseStatus(p: SheetPerson): { label: string; tone: 'done' | 'out' | 'seen' | 'waiting' | 'owner' } {
-  if (p.is_owner) return { label: 'Paid', tone: 'owner' };
-  if (p.out_of_bill) return { label: 'Not part of it', tone: 'out' };
-  if (p.responded_at) return { label: 'Done', tone: 'done' };
-  if (p.viewed_at) return { label: 'Opened', tone: 'seen' };
-  return { label: 'Waiting', tone: 'waiting' };
+export function responseStatus(p: SheetPerson, payer?: SheetPerson): { label: string; tone: 'done' | 'out' | 'seen' | 'waiting' | 'owner' } {
+  const paid = payer ? p.id === payer.id : p.is_owner;
+  if (p.is_owner) return { label: paid ? 'Paid' : 'Shared it', tone: 'owner' };
+  const base: { label: string; tone: 'done' | 'out' | 'seen' | 'waiting' } = p.out_of_bill
+    ? { label: 'Not part of it', tone: 'out' }
+    : p.responded_at
+      ? { label: 'Done', tone: 'done' }
+      : p.viewed_at
+        ? { label: 'Opened', tone: 'seen' }
+        : { label: 'Waiting', tone: 'waiting' };
+  return paid ? { label: `Paid, ${base.label.toLowerCase()}`, tone: base.tone } : base;
 }
 
 /** What happened to the WhatsApp message, for the owner. */
@@ -91,7 +101,7 @@ export function e164(phone: string | undefined): string | null {
   return n ? `+${n}` : null;
 }
 
-/** The expense a closed sheet becomes: you paid, everyone owes exactly their total. */
+/** The expense a closed sheet becomes: whoever paid, paid; everyone owes exactly their total. */
 export function sheetExpense(ref: SheetRef, d: SheetData, totals: SheetResult, id: string, now: number): ExpenseItem | null {
   if (totals.total <= 0) return null;
   const amounts: Record<string, number> = {};
@@ -99,8 +109,8 @@ export function sheetExpense(ref: SheetRef, d: SheetData, totals: SheetResult, i
     const t = totals.totals.get(personId)?.total ?? 0;
     if (t > 0) amounts[memberId] = (amounts[memberId] ?? 0) + t;
   }
-  const owner = ref.people.find((p) => p.personId === d.people.find((x) => x.is_owner)?.id);
-  if (!owner) return null;
+  const payer = ref.people.find((p) => p.personId === payerOf(d).id);
+  if (!payer) return null;
   return {
     kind: 'expense',
     id,
@@ -109,7 +119,7 @@ export function sheetExpense(ref: SheetRef, d: SheetData, totals: SheetResult, i
     description: d.sheet.title,
     category: ref.category,
     amount: totals.total,
-    paidBy: owner.memberId,
+    paidBy: payer.memberId,
     split: { method: 'exact', amounts },
   };
 }
@@ -127,6 +137,8 @@ export function groupShareText(d: SheetData, totals: SheetResult, link: (token: 
       ? "Open your link and untick anything you weren't part of. If you don't, you're in for everything."
       : 'Open your link and tick what you had.',
   ];
+  const payer = payerOf(d);
+  if (owner && payer && payer.id !== owner.id) lines.push(`${first(payer.name)} paid, so you'll pay ${first(payer.name)}.`);
   if (d.sheet.note) lines.push(d.sheet.note);
   lines.push('');
   for (const p of others) lines.push(`${first(p.name)}: ${link(p.token!)}`);
@@ -138,11 +150,11 @@ export function groupShareText(d: SheetData, totals: SheetResult, link: (token: 
  * amounts"), so no Splitwise subscription or API key is needed.
  */
 export function splitwiseText(d: SheetData, totals: SheetResult): string {
-  const owner = d.people.find((p) => p.is_owner);
-  const lines = [`${d.sheet.title}: ${usd(totals.total)}, paid by ${owner?.name ?? 'me'}`, 'Split by exact amounts:'];
+  const payer = payerOf(d);
+  const lines = [`${d.sheet.title}: ${usd(totals.total)}, paid by ${payer?.name ?? 'me'}`, 'Split by exact amounts:'];
   for (const p of d.people) {
     const t = totals.totals.get(p.id)?.total ?? 0;
-    if (t > 0 || p.is_owner) lines.push(`${p.name}: ${usd(t)}`);
+    if (t > 0 || p.id === payer?.id) lines.push(`${p.name}: ${usd(t)}`);
   }
   return lines.join('\n');
 }

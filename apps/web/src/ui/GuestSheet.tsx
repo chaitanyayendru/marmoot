@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check } from 'lucide-react';
 import type { Api } from '../api.ts';
 import { usd } from '../money.ts';
-import { responseStatus, sheetTotals } from '../sheet.ts';
+import { payerOf, responseStatus, sheetTotals } from '../sheet.ts';
 import { Notice } from './bits.tsx';
 import { useSheet, withChoice } from './useSheet.ts';
 
@@ -36,6 +36,8 @@ export function GuestSheet({ api, token }: { api: Api; token: string }) {
 
   const me = data.people.find((p) => p.id === data.me.id)!;
   const owner = data.people.find((p) => p.is_owner)!;
+  const payer = payerOf(data);
+  const iPaid = payer.id === me.id;
   const open = data.sheet.status === 'open';
   const mine = totals.totals.get(me.id) ?? { items: 0, extras: 0, total: 0 };
   const inFor = (item: string) => !me.out_of_bill && !!totals.cells.get(item)?.has(me.id) && !totals.unclaimed.includes(item);
@@ -53,6 +55,7 @@ export function GuestSheet({ api, token }: { api: Api; token: string }) {
         <p className="hero-sub muted">
           {me.out_of_bill ? 'You said you weren’t part of this bill' : `Your share of ${usd(totals.total)}`}
           {open ? '' : ', final'}
+          {payer.id !== owner.id ? `. ${iPaid ? 'You' : first(payer.name)} paid.` : ''}
         </p>
       </section>
 
@@ -92,7 +95,7 @@ export function GuestSheet({ api, token }: { api: Api; token: string }) {
                 />
                 <span className="row-main">
                   <span className="row-title">{it.name}</span>
-                  <span className="row-sub">{people.length ? `${people.join(', ')} ${people.length === 1 && people[0] !== 'you' ? 'is' : 'are'} in` : `Nobody yet: ${first(owner.name)} covers it`}</span>
+                  <span className="row-sub">{people.length ? `${people.join(', ')} ${people.length === 1 && people[0] !== 'you' ? 'is' : 'are'} in` : `Nobody yet: ${payer.id === me.id ? 'you cover' : `${first(payer.name)} covers`} it`}</span>
                 </span>
                 <span className="row-end">
                   <span className="num">{usd(Number(it.price_cents))}</span>
@@ -107,7 +110,7 @@ export function GuestSheet({ api, token }: { api: Api; token: string }) {
       <dl className="breakdown">
         <div><dt>Your items</dt><dd className="num">{usd(mine.items)}</dd></div>
         <div><dt>Your share of tax and tip</dt><dd className="num">{usd(mine.extras)}</dd></div>
-        <div className="total"><dt>You pay {first(owner.name)}</dt><dd className="num">{usd(mine.total)}</dd></div>
+        <div className="total"><dt>{iPaid ? 'Your part (you paid the bill)' : `You pay ${first(payer.name)}`}</dt><dd className="num">{usd(mine.total)}</dd></div>
       </dl>
 
       {open && !isOwner && (
@@ -133,7 +136,7 @@ export function GuestSheet({ api, token }: { api: Api; token: string }) {
         <h2 className="month">Everyone</h2>
         <ul className="list">
           {data.people.map((p) => {
-            const st = responseStatus(p);
+            const st = responseStatus(p, payerOf(data));
             return (
               <li key={p.id} className="list-row">
                 <span className="avatar" aria-hidden="true">{p.name.slice(0, 1).toUpperCase()}</span>

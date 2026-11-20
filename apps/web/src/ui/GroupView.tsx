@@ -1,5 +1,5 @@
 import { useMemo, useState, type Dispatch } from 'react';
-import { ArrowLeftRight, ChevronLeft, ListChecks, Repeat, Spade, Trash2, Users, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronLeft, ListChecks, Pencil, Repeat, Spade, Trash2, Users, X } from 'lucide-react';
 import { go } from '../App.tsx';
 import { parseDollars, usd } from '../money.ts';
 import {
@@ -36,6 +36,7 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
   const [added, setAdded] = useState<ExpenseItem | null>(null);
   const [dueAmounts, setDueAmounts] = useState<Record<string, string>>({});
   const [openItem, setOpenItem] = useState<ExpenseItem | PaymentItem | null>(null);
+  const [editingItem, setEditingItem] = useState<ExpenseItem | null>(null);
   const nets = useMemo(() => groupNets(group), [group]);
   const mine = nets.get(group.me) ?? 0;
   const history = useMemo(() => balanceHistory(group), [group]);
@@ -216,6 +217,14 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
           group={group}
           item={openItem}
           onClose={() => setOpenItem(null)}
+          onEdit={
+            openItem.kind === 'expense'
+              ? () => {
+                  setEditingItem(openItem);
+                  setOpenItem(null);
+                }
+              : undefined
+          }
           onDelete={() => {
             dispatch({ type: 'deleteItem', group: group.id, item: openItem.id });
             setOpenItem(null);
@@ -223,15 +232,27 @@ export function GroupView({ group, dispatch, saved }: { group: Group; dispatch: 
         />
       )}
 
+      {editingItem && (
+        <ExpenseSheet
+          group={group}
+          editing={editingItem}
+          onClose={() => setEditingItem(null)}
+          onSave={(item) => {
+            dispatch({ type: 'updateItem', group: group.id, item });
+            setEditingItem(null);
+          }}
+        />
+      )}
+
       {added && (
         <div className="toast" role="status">
           <span>Added {added.description || categoryLabel(added.category)}, {usd(added.amount)}.</span>
-          {api && added.paidBy === group.me && added.split.method === 'equal' ? (
+          {api && added.split.method === 'equal' ? (
             <button
               className="pill small"
               onClick={() => {
                 // Turn it into a bill sheet so people can confirm or opt out, then send.
-                prefillSheet({ title: added.description, amount: added.amount, category: added.category, among: added.split.method === 'equal' ? added.split.among : [] });
+                prefillSheet({ title: added.description, amount: added.amount, category: added.category, among: added.split.method === 'equal' ? added.split.among : [], paidBy: added.paidBy });
                 dispatch({ type: 'deleteItem', group: group.id, item: added.id });
                 setAdded(null);
                 window.location.hash = `/g/${group.id}/sheet/new`;
@@ -314,7 +335,7 @@ function StartGame({ group, onClose, onStart }: { group: Group; onClose: () => v
 }
 
 /** An expense or payment: who paid, each person's share, and deleting it. */
-function ItemDetails({ group, item, onClose, onDelete }: { group: Group; item: ExpenseItem | PaymentItem; onClose: () => void; onDelete: () => void }) {
+function ItemDetails({ group, item, onClose, onEdit, onDelete }: { group: Group; item: ExpenseItem | PaymentItem; onClose: () => void; onEdit?: () => void; onDelete: () => void }) {
   const [confirm, setConfirm] = useState(false);
   const who = (id: string) => (id === group.me ? 'You' : group.members.find((m) => m.id === id)?.name ?? 'Someone');
   const nets = itemNets(item);
@@ -354,9 +375,16 @@ function ItemDetails({ group, item, onClose, onDelete }: { group: Group; item: E
             </div>
           </div>
         ) : (
-          <button className="pill danger wide" onClick={() => setConfirm(true)}>
-            <Trash2 size={16} /> Delete {item.kind === 'expense' ? 'expense' : 'payment'}
-          </button>
+          <div className="two">
+            {onEdit && (
+              <button className="pill" onClick={onEdit}>
+                <Pencil size={16} /> Edit
+              </button>
+            )}
+            <button className="pill danger" onClick={() => setConfirm(true)}>
+              <Trash2 size={16} /> Delete
+            </button>
+          </div>
         )}
       </div>
     </Sheet>

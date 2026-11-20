@@ -227,6 +227,8 @@ export type Action =
   | { type: 'removeMember'; group: string; member: string }
   | { type: 'addItem'; group: string; item: Item }
   | { type: 'deleteItem'; group: string; item: string }
+  /** An edited expense or payment: same id, new details. */
+  | { type: 'updateItem'; group: string; item: Item }
   | { type: 'addRecurring'; group: string; recurring: Recurring }
   | { type: 'deleteRecurring'; group: string; recurring: string }
   | { type: 'catchUp'; today: string; now: number; group?: string }
@@ -345,6 +347,8 @@ export function reducer(s: State, a: Action): State {
       return mapGroup(s, a.group, (g) => (memberInUse(g, a.member) ? g : { ...g, members: g.members.filter((m) => m.id !== a.member) }));
     case 'addItem':
       return mapGroup(s, a.group, (g) => ({ ...g, items: [...g.items, a.item] }));
+    case 'updateItem':
+      return mapGroup(s, a.group, (g) => (g.items.some((i) => i.id === a.item.id) ? { ...g, items: g.items.map((i) => (i.id === a.item.id ? a.item : i)) } : g));
     case 'deleteItem':
       return mapGroup(s, a.group, (g) => ({ ...g, items: g.items.filter((i) => i.id !== a.item) }));
     case 'addSheet':

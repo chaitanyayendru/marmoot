@@ -5,7 +5,7 @@ import { ApiError, type Api, type SheetData, type SheetPerson } from '../api.ts'
 import { sheetLink } from '../apiClient.ts';
 import { parseDollars, usd } from '../money.ts';
 import { newId, type Action, type Group, type SheetRef } from '../model.ts';
-import { eventText, groupShareText, messageStatus, responseStatus, sheetExpense, sheetTotals, splitwiseText } from '../sheet.ts';
+import { eventText, groupShareText, messageStatus, payerOf, responseStatus, sheetExpense, sheetTotals, splitwiseText } from '../sheet.ts';
 import { waLink } from '../whatsapp.ts';
 import { Notice, Sheet } from './bits.tsx';
 import { useSheet, withChoice } from './useSheet.ts';
@@ -48,6 +48,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
   }
 
   const open = data.sheet.status === 'open';
+  const payer = payerOf(data);
   const others = data.people.filter((p) => !p.is_owner);
   const answered = others.filter((p) => p.responded_at || p.out_of_bill).length;
   const unsent = others.filter((p) => p.has_phone && (!p.alert_status || p.alert_status === 'not_sent' || p.alert_status === 'failed'));
@@ -144,8 +145,27 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
         <p className="hero-amount num">{usd(totals.total)}</p>
         <p className="hero-sub muted">
           {open ? `${answered} of ${others.length} answered` : sheetRef.expenseId ? `Closed and added to ${group.name}` : 'Closed'}
+          {`. ${payer.id === myPerson ? 'You' : first(payer.name)} paid.`}
         </p>
       </section>
+
+      {open && (
+        <label className="field">
+          <span>Paid by</span>
+          <select
+            value={payer.id}
+            onChange={(e) => {
+              const id = e.target.value;
+              void change((d) => ({ ...d, people: d.people.map((p) => ({ ...p, paid: p.id === id })) }), () => api.setPayer(token, id));
+            }}
+          >
+            {data.people.map((p) => (
+              <option key={p.id} value={p.id}>{p.id === myPerson ? `${p.name} (you)` : p.name}</option>
+            ))}
+          </select>
+          <span className="fine">Everyone pays this person, and anything nobody keeps stays with them.</span>
+        </label>
+      )}
 
       {error && <Notice tone="warn">{error}</Notice>}
 
@@ -177,7 +197,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
             <tr>
               <th scope="col" className="item-col">Item</th>
               {data.people.map((p) => {
-                const st = responseStatus(p);
+                const st = responseStatus(p, payerOf(data));
                 return (
                   <th key={p.id} scope="col" className="person-col">
                     <span className="person-name">{p.id === myPerson ? 'You' : first(p.name)}</span>
@@ -252,7 +272,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
         <h2 className="month">People</h2>
         <ul className="list">
           {others.map((p) => {
-            const st = responseStatus(p);
+            const st = responseStatus(p, payerOf(data));
             return (
               <li key={p.id} className="list-row person-row-status">
                 <span className="avatar" aria-hidden="true">{p.name.slice(0, 1).toUpperCase()}</span>
@@ -267,7 +287,7 @@ export function SheetView({ api, group, sheetRef, dispatch }: { api: Api; group:
                   ) : (
                     <span className="row-sub">
                       {p.out_of_bill ? 'Not part of this bill' : p.responded_at ? `Finished, ${time(p.responded_at)}` : p.viewed_at ? `Opened, ${time(p.viewed_at)}` : "Hasn't opened their link yet"}
-                      {` · owes ${usd(totals.totals.get(p.id)?.total ?? 0)}`}
+                      {` · ${p.id === payer.id ? 'their share' : 'owes'} ${usd(totals.totals.get(p.id)?.total ?? 0)}`}
                     </span>
                   )}
                   {metaSend && p.alert_status === 'failed' && p.alert_error && <span className="warn-text">{p.alert_error}</span>}

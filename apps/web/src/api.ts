@@ -16,6 +16,8 @@ export interface SheetPerson {
   id: string;
   name: string;
   is_owner: boolean;
+  /** Who paid the bill: exactly one person (older servers leave it out; then the owner paid). */
+  paid?: boolean;
   out_of_bill: boolean;
   viewed_at: string | null;
   responded_at: string | null;
@@ -60,7 +62,7 @@ export interface SheetData {
 
 export interface NewSheet {
   title: string;
-  people: { name: string; phone?: string | null; owner?: boolean }[];
+  people: { name: string; phone?: string | null; owner?: boolean; paid?: boolean }[];
   items: { name: string; price: Cents }[];
   tax: Cents;
   tip: Cents;
@@ -173,6 +175,7 @@ export function createApi(
         p_default_in: s.defaultIn,
       }),
     sheet: (token: string) => rpc<SheetData>('bill_sheet', { p_token: token }),
+    setPayer: (owner: string, person: string) => rpc('set_bill_payer', { p_owner_token: owner, p_person: person }),
     markViewed: (token: string) => rpc('mark_bill_viewed', { p_token: token }),
     setChoice: (token: string, item: string, isIn: boolean, person?: string) =>
       rpc('set_bill_choice', { p_token: token, p_item: item, p_in: isIn, p_person: person ?? null }),

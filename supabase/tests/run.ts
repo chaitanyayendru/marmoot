@@ -573,6 +573,30 @@ async function costcoSheet() {
 }
 
 describe('bill sheets', () => {
+  test('who paid: the owner unless someone else is marked; the owner can change it while open', async (t) => {
+    if (!url) return t.skip();
+    const paidBy = async (token: string) => ((await view(token)) as unknown as { people: { name: string; paid: boolean }[] }).people.filter((p) => p.paid).map((p) => p.name);
+    const old = await costcoSheet();
+    assert.deepEqual(await paidBy(old.hima), ['Chai'], 'nobody marked: the owner paid');
+
+    const made = (await anon<{ r: { owner_token: string; people: { id: string; name: string; token: string }[] } }>(
+      'select create_bill_sheet($1, $2, $3) as r',
+      ['Kroger', JSON.stringify([{ name: 'Chai', owner: true }, { name: 'Asha', paid: true }, { name: 'Ben' }]), JSON.stringify([{ name: 'Milk', price: 400 }])],
+    ))[0]!.r;
+    const ben = made.people.find((p) => p.name === 'Ben')!;
+    assert.deepEqual(await paidBy(ben.token), ['Asha']);
+    await assert.rejects(anon('select set_bill_payer($1, $2)', [ben.token, ben.id]), /Only the person who shared/);
+    await anon('select set_bill_payer($1, $2)', [made.owner_token, ben.id]);
+    assert.deepEqual(await paidBy(ben.token), ['Ben']);
+    await assert.rejects(anon('select set_bill_payer($1, $2)', [made.owner_token, randomUUID()]), /isn't on this bill/);
+    await assert.rejects(
+      anon('select create_bill_sheet($1, $2)', ['Two payers', JSON.stringify([{ name: 'A', owner: true, paid: true }, { name: 'B', paid: true }])]),
+      /Only one person can have paid/,
+    );
+    await anon('select close_bill_sheet($1)', [made.owner_token]);
+    await assert.rejects(anon('select set_bill_payer($1, $2)', [made.owner_token, made.people[0]!.id]), /closed/i);
+  });
+
   test('anyone can start a sheet; guests see every cell but no phones, links or activity', async (t) => {
     if (!url) return t.skip();
     const s = await costcoSheet();
@@ -794,8 +818,9 @@ describe('shared groups', () => {
     assert.equal((await db.query('select count(*)::int as n from bill_items where sheet_id = $1', [sheet.sheet_id])).rows[0].n, 0);
 
     const id = await newGroup();
-    // removeSheet can now be shared.
+    // removeSheet and updateItem can now be shared.
     await as(userA, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev(`rm-${randomUUID()}`, { type: 'removeSheet', group: id, sheet: 's1' })])]));
+    await as(userA, (q) => q('select append_group_events($1, $2)', [id, JSON.stringify([ev(`up-${randomUUID()}`, { ...addItem(id, 'e9'), type: 'updateItem' })])]));
     const token = await as(userA, async (q) => (await q('select group_invite($1) as t', [id])).rows[0].t as string);
     await as(userB, (q) => q('select request_to_join($1, $2)', [token, 'Ben']));
     const req = (await as(userA, async (q) => (await q('select * from group_join_requests($1)', [id])).rows))[0];

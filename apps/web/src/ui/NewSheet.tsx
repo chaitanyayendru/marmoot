@@ -16,7 +16,7 @@ interface Row {
 }
 
 /** Values carried over from the Add expense sheet, read once when this page opens. */
-let prefill: { title: string; amount: number | null; category: Category; among: string[] } | null = null;
+let prefill: { title: string; amount: number | null; category: Category; among: string[]; paidBy?: string } | null = null;
 export function prefillSheet(p: NonNullable<typeof prefill>) {
   prefill = p;
 }
@@ -38,6 +38,8 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
   const [note, setNote] = useState('');
   const [defaultIn, setDefaultIn] = useState(true);
   const [among, setAmong] = useState<string[]>(s?.among.length ? s.among : group.members.map((m) => m.id));
+  // Who paid: you unless you say otherwise (or the Add expense sheet did).
+  const [paidBy, setPaidBy] = useState<string>(s?.paidBy && group.members.some((m) => m.id === s.paidBy) ? s.paidBy : group.me);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -54,7 +56,7 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
   const taxC = tax.trim() ? parseDollars(tax) : 0;
   const tipC = tip.trim() ? parseDollars(tip) : 0;
   const total = items.reduce((t, r) => t + (r.cents ?? 0), 0) + (taxC ?? 0) + (tipC ?? 0);
-  const people = group.members.filter((m) => among.includes(m.id) || m.id === group.me);
+  const people = group.members.filter((m) => among.includes(m.id) || m.id === group.me || m.id === paidBy);
   const ok = !!meMember && !!ownerName.trim() && !!title.trim() && items.length > 0 && !badRow && taxC !== null && tipC !== null && people.length >= 2 && !saving;
 
   const setRow = (key: number, patch: Partial<Row>) => {
@@ -114,7 +116,7 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
       const ordered = [group.members.find((m) => m.id === group.me)!, ...people.filter((m) => m.id !== group.me)];
       const created = await api.createSheet({
         title: title.trim(),
-        people: ordered.map((m) => ({ name: m.id === group.me ? ownerName.trim() : m.name, phone: e164(m.phone), owner: m.id === group.me })),
+        people: ordered.map((m) => ({ name: m.id === group.me ? ownerName.trim() : m.name, phone: e164(m.phone), owner: m.id === group.me, paid: m.id === paidBy })),
         items: items.map((r) => ({ name: r.name.trim(), price: r.cents! })),
         tax: taxC ?? 0,
         tip: tipC ?? 0,
@@ -246,6 +248,23 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
         </div>
         <p className="fine">Tax and tip are split in proportion to what each person keeps.</p>
 
+        <label className="field">
+          <span>Paid by</span>
+          <select
+            value={paidBy}
+            onChange={(e) => {
+              const id = e.target.value;
+              setPaidBy(id);
+              if (!among.includes(id)) setAmong([...among, id]);
+            }}
+          >
+            {group.members.map((m) => (
+              <option key={m.id} value={m.id}>{m.id === group.me ? (m.name === 'You' ? 'You' : `${m.name} (you)`) : m.name}</option>
+            ))}
+          </select>
+          {paidBy !== group.me && <span className="fine">You share the bill; everyone pays {group.members.find((m) => m.id === paidBy)?.name}.</span>}
+        </label>
+
         <fieldset>
           <legend>Who's on it</legend>
           <div className="checks">
@@ -253,12 +272,15 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
               <label key={m.id} className="check">
                 <input
                   type="checkbox"
-                  checked={m.id === group.me || among.includes(m.id)}
-                  disabled={m.id === group.me}
+                  checked={m.id === group.me || m.id === paidBy || among.includes(m.id)}
+                  disabled={m.id === group.me || m.id === paidBy}
                   onChange={(e) => setAmong(e.target.checked ? [...among, m.id] : among.filter((x) => x !== m.id))}
                 />
                 <span className="row-main">
-                  <span>{m.id === group.me ? `${m.name === 'You' ? 'You' : m.name} (paid)` : m.name}</span>
+                  <span>
+                    {m.id === group.me ? (m.name === 'You' ? 'You' : `${m.name} (you)`) : m.name}
+                    {m.id === paidBy ? ', paid' : ''}
+                  </span>
                   {m.id !== group.me && <span className="row-sub">{e164(m.phone) ? 'Gets a WhatsApp message' : 'No WhatsApp number yet: you can share their link instead'}</span>}
                 </span>
               </label>
@@ -277,7 +299,9 @@ export function NewSheet({ group, dispatch, geminiKey }: { group: Group; dispatc
             </label>
           </div>
           <p className="fine">
-            {defaultIn ? 'People untick what they weren\'t part of. Anyone who never answers pays for everything.' : 'People tick what they had. Anything nobody ticks stays with you.'}
+            {defaultIn
+              ? 'People untick what they weren\'t part of. Anyone who never answers pays for everything.'
+              : `People tick what they had. Anything nobody ticks stays with ${paidBy === group.me ? 'you' : group.members.find((m) => m.id === paidBy)?.name}.`}
           </p>
         </fieldset>
 

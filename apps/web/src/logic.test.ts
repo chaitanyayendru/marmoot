@@ -19,7 +19,7 @@ import {
 } from './model.ts';
 import { payAction } from './payments.ts';
 import { parseReceipt, readReceipt, receiptFile, receiptRequest, suggestedModels } from './receipt.ts';
-import { groupShareText, sheetTotals, splitwiseText } from './sheet.ts';
+import { groupShareText, payerOf, responseStatus, sheetExpense, sheetTotals, splitwiseText } from './sheet.ts';
 import type { SheetData } from './api.ts';
 import { sampleGroup } from './sample.ts';
 import { expenseText, planText, reminderText, waLink, waNumber } from './whatsapp.ts';
@@ -164,6 +164,17 @@ describe('one-tap WhatsApp', () => {
   });
 });
 
+describe('editing', () => {
+  it('an edited expense keeps its id and place; a missing one changes nothing', () => {
+    const g = flat();
+    const item = { kind: 'expense' as const, id: 'x1', at: 1, date: '2026-11-13', description: 'Costco', category: 'groceries' as const, amount: 900, paidBy: 'you', split: { method: 'equal' as const, among: ['you', 'ravi'] } };
+    let s: State = { groups: [{ ...g, items: [item] }], theme: 'system' };
+    s = reducer(s, { type: 'updateItem', group: g.id, item: { ...item, paidBy: 'ravi', amount: 1000 } });
+    expect(s.groups[0]!.items).toEqual([{ ...item, paidBy: 'ravi', amount: 1000 }]);
+    expect(reducer(s, { type: 'updateItem', group: g.id, item: { ...item, id: 'nope' } })).toEqual(s);
+  });
+});
+
 describe('deleting', () => {
   it('a deleted bill sheet comes off the group, with the expense it added', () => {
     const g: Group = { ...flat(), sheets: [
@@ -301,6 +312,21 @@ describe('sharing a bill without subscriptions', () => {
     expect(text).toContain('Ben: https://x.test/?s=tb');
     expect(text).not.toContain('Cy:');
     expect(text).not.toContain('own');
+  });
+
+  it('when someone else paid: unclaimed items, the expense and the messages all follow them', () => {
+    const paidByBen = { ...data, people: data.people.map((p) => ({ ...p, paid: p.id === 'b' })), choices: [...data.choices, { item_id: 'i2', person_id: 'o', is_in: false }, { item_id: 'i2', person_id: 'b', is_in: false }] } as SheetData;
+    expect(payerOf(paidByBen).name).toBe('Ben');
+    expect(payerOf(data).name).toBe('Chai Y');
+    const totals = sheetTotals(paidByBen);
+    // Onions: nobody kept them, so they stay with Ben, who paid.
+    expect(totals.totals.get('b')!.total).toBe(600);
+    const ref = { id: 's', ownerToken: 'own', title: 'Costco', category: 'groceries' as const, date: '2026-11-20', createdAt: 1, people: [{ personId: 'o', memberId: 'm-o' }, { personId: 'a', memberId: 'm-a' }, { personId: 'b', memberId: 'm-b' }] };
+    expect(sheetExpense(ref, paidByBen, totals, 'x', 1)!.paidBy).toBe('m-b');
+    expect(splitwiseText(paidByBen, totals)).toContain('paid by Ben');
+    expect(groupShareText(paidByBen, totals, (t) => t)).toContain("Ben paid, so you'll pay Ben.");
+    expect(responseStatus(paidByBen.people[0]!, payerOf(paidByBen)).label).toBe('Shared it');
+    expect(responseStatus(paidByBen.people[2]!, payerOf(paidByBen)).label).toBe('Paid, waiting');
   });
 
   it('lists exact amounts for Splitwise that add up to the bill', () => {

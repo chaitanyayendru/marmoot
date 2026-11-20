@@ -25,20 +25,39 @@ function parsePercent(s: string): number | null {
 
 interface Props {
   group: Group;
+  /** Change this expense instead of adding one. It keeps its id. */
+  editing?: ExpenseItem;
   onClose: () => void;
   onSave: (item: ExpenseItem, repeat: Recurring | null) => void;
 }
 
-export function ExpenseSheet({ group, onClose, onSave }: Props) {
+const dollars = (c: number) => (c / 100).toFixed(2);
+const percent = (bp: number) => (bp % 100 === 0 ? String(bp / 100) : (bp / 100).toFixed(2));
+
+/** The split's numbers as the form shows them, for editing. */
+function valuesOf(split: Split): Record<string, string> {
+  switch (split.method) {
+    case 'exact':
+      return Object.fromEntries(Object.entries(split.amounts).map(([k, v]) => [k, v ? dollars(v) : '']));
+    case 'percent':
+      return Object.fromEntries(Object.entries(split.basisPoints).map(([k, v]) => [k, v ? percent(v) : '']));
+    case 'shares':
+      return Object.fromEntries(Object.entries(split.shares).map(([k, v]) => [k, String(v)]));
+    default:
+      return {};
+  }
+}
+
+export function ExpenseSheet({ group, editing, onClose, onSave }: Props) {
   const ids = group.members.map((m) => m.id);
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<Category>('groceries');
-  const [paidBy, setPaidBy] = useState(group.me);
-  const [method, setMethod] = useState<Method>('equal');
-  const [among, setAmong] = useState<string[]>(ids);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [date, setDate] = useState(today());
+  const [amount, setAmount] = useState(editing ? dollars(editing.amount) : '');
+  const [description, setDescription] = useState(editing?.description ?? '');
+  const [category, setCategory] = useState<Category>(editing?.category ?? 'groceries');
+  const [paidBy, setPaidBy] = useState(editing?.paidBy ?? group.me);
+  const [method, setMethod] = useState<Method>(editing?.split.method ?? 'equal');
+  const [among, setAmong] = useState<string[]>(editing?.split.method === 'equal' ? editing.split.among : ids);
+  const [values, setValues] = useState<Record<string, string>>(editing ? valuesOf(editing.split) : {});
+  const [date, setDate] = useState(editing?.date ?? today());
   const [every, setEvery] = useState<'none' | 'week' | 'month'>('none');
   const [varies, setVaries] = useState(true);
 
@@ -91,6 +110,10 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
 
   function save() {
     if (!ok || !total || !split) return;
+    if (editing) {
+      onSave({ ...editing, date, description: description.trim(), category, amount: total, paidBy, split }, null);
+      return;
+    }
     const item: ExpenseItem = { kind: 'expense', id: newId(), at: Date.now(), date, description: description.trim(), category, amount: total, paidBy, split };
     let repeat: Recurring | null = null;
     if (every !== 'none') {
@@ -107,12 +130,12 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
   };
 
   return (
-    <Sheet title="Add expense" onClose={onClose}>
+    <Sheet title={editing ? 'Edit expense' : 'Add expense'} onClose={onClose}>
       <form className="stack" onSubmit={(e) => { e.preventDefault(); save(); }}>
         <label className="amount-field">
           <span className="sr-only">Amount</span>
           <span className="num currency" aria-hidden="true">$</span>
-          <input className="num" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus aria-invalid={amount.trim() !== '' && !total} />
+          <input className="num" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus={!editing} aria-invalid={amount.trim() !== '' && !total} />
         </label>
 
         <label className="field">
@@ -120,12 +143,12 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
           <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Costco run, October electricity" />
         </label>
 
-        {api && (
+        {api && !editing && (
           <button
             type="button"
             className="link"
             onClick={() => {
-              prefillSheet({ title: description.trim(), amount: total, category, among });
+              prefillSheet({ title: description.trim(), amount: total, category, among, paidBy });
               onClose();
               window.location.hash = `/g/${group.id}/sheet/new`;
             }}
@@ -197,6 +220,7 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
           <p className={`fine ${ok ? '' : 'warn-text'}`} aria-live="polite">{ok ? 'Shares add up to the total.' : result.error}</p>
         </fieldset>
 
+        {!editing && (
         <label className="field">
           <span>Repeats</span>
           <select value={every} onChange={(e) => setEvery(e.target.value as typeof every)}>
@@ -205,14 +229,16 @@ export function ExpenseSheet({ group, onClose, onSave }: Props) {
             <option value="week">Every week</option>
           </select>
         </label>
-        {every !== 'none' && (
+        )}
+        {!editing && every !== 'none' && (
           <label className="check">
             <input type="checkbox" checked={varies} onChange={(e) => setVaries(e.target.checked)} />
             <span>The amount changes each time (I'll be asked for it)</span>
           </label>
         )}
+        {editing?.recurringId && <p className="fine">This changes only this one. The repeating bill stays as it is.</p>}
 
-        <button className="pill primary wide" disabled={!ok}>Add expense{total ? `, ${usd(total)}` : ''}</button>
+        <button className="pill primary wide" disabled={!ok}>{editing ? 'Save changes' : 'Add expense'}{total ? `, ${usd(total)}` : ''}</button>
       </form>
     </Sheet>
   );
