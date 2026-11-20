@@ -1,7 +1,8 @@
 import { useState, type Dispatch, type FormEvent } from 'react';
-import { ChevronLeft, Plus, X } from 'lucide-react';
+import { ChevronLeft, Contact, Plus, X } from 'lucide-react';
 import { go } from '../App.tsx';
 import { newGroup, newMember, type Action } from '../model.ts';
+import { canPickContacts, newPeople, pickContacts } from '../contacts.ts';
 import { waNumber } from '../whatsapp.ts';
 import { NotSaving } from './bits.tsx';
 
@@ -11,7 +12,19 @@ export function NewGroup({ dispatch, saved }: { dispatch: Dispatch<Action>; save
   const [people, setPeople] = useState([{ name: '', phone: '' }, { name: '', phone: '' }]);
 
   const named = people.filter((p) => p.name.trim());
-  const ready = name.trim() && you.trim() && named.length > 0;
+
+  async function fromContacts() {
+    try {
+      const picked = await pickContacts(true);
+      const { add } = newPeople(picked, named);
+      if (!add.length) return;
+      setPeople([...named, ...add.map((p) => ({ name: p.name, phone: p.phone })), { name: '', phone: '' }]);
+    } catch {
+      // Picker closed or unavailable: type them in.
+    }
+  }
+  // Just you is fine: share the invite link afterwards and people add themselves.
+  const ready = name.trim() && you.trim();
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +60,7 @@ export function NewGroup({ dispatch, saved }: { dispatch: Dispatch<Action>; save
             return (
               <div key={i} className="person-row">
                 <input aria-label={`Person ${i + 1} name`} value={p.name} placeholder="Name" onChange={(e) => setPeople(people.map((q, j) => (j === i ? { ...q, name: e.target.value } : q)))} />
-                <input aria-label={`Person ${i + 1} WhatsApp number`} value={p.phone} placeholder="WhatsApp number" inputMode="tel" aria-invalid={badPhone} onChange={(e) => setPeople(people.map((q, j) => (j === i ? { ...q, phone: e.target.value } : q)))} />
+                <input aria-label={`Person ${i + 1} WhatsApp number`} type="tel" value={p.phone} placeholder="WhatsApp number" inputMode="tel" aria-invalid={badPhone} onChange={(e) => setPeople(people.map((q, j) => (j === i ? { ...q, phone: e.target.value } : q)))} />
                 {people.length > 1 && (
                   <button type="button" className="icon-btn" aria-label={`Remove person ${i + 1}`} onClick={() => setPeople(people.filter((_, j) => j !== i))}>
                     <X size={18} />
@@ -56,9 +69,17 @@ export function NewGroup({ dispatch, saved }: { dispatch: Dispatch<Action>; save
               </div>
             );
           })}
-          <button type="button" className="pill small" onClick={() => setPeople([...people, { name: '', phone: '' }])}>
-            <Plus size={16} /> Add someone
-          </button>
+          <div className="two">
+            <button type="button" className="pill small" onClick={() => setPeople([...people, { name: '', phone: '' }])}>
+              <Plus size={16} /> Add someone
+            </button>
+            {canPickContacts() && (
+              <button type="button" className="pill small" onClick={() => void fromContacts()}>
+                <Contact size={16} /> From contacts
+              </button>
+            )}
+          </div>
+          {!canPickContacts() && <p className="fine">Or skip this: after creating the group, share its invite link and people add themselves.</p>}
         </fieldset>
 
         <button className="pill primary wide" disabled={!ready}>Create group</button>

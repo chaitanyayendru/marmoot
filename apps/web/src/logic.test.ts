@@ -18,6 +18,7 @@ import {
   type State,
 } from './model.ts';
 import { payAction } from './payments.ts';
+import { bestPhone, fromContacts, newPeople } from './contacts.ts';
 import { parseReceipt, readReceipt, receiptFile, receiptRequest, suggestedModels } from './receipt.ts';
 import { groupShareText, payerOf, responseStatus, sheetExpense, sheetTotals, splitwiseText } from './sheet.ts';
 import type { SheetData } from './api.ts';
@@ -161,6 +162,28 @@ describe('one-tap WhatsApp', () => {
     const t = { from: 'ravi', to: 'meera', amount: 3500, rail: 'paypal' };
     expect(payAction(t, M('meera', { paypal: 'https://paypal.me/MeeraK' }), 'x')).toMatchObject({ href: 'https://paypal.me/MeeraK/35.00' });
     expect(transferKey(t)).toBe('ravi>meera:3500');
+  });
+});
+
+describe('adding people from contacts', () => {
+  it('takes a name and the number WhatsApp can use, and skips people already in the group', () => {
+    const picked = fromContacts([
+      { name: ['Asha Rao'], tel: ['(404) 555-0101'] },
+      { name: ['Ben'], tel: ['555-0102', '+91 94904 36245'] },
+      { name: [], tel: ['+1 404 555 0103'] },
+      { name: ['Nobody'], tel: [] },
+      {},
+    ]);
+    expect(picked).toEqual([
+      { name: 'Asha Rao', phone: '(404) 555-0101' },
+      { name: 'Ben', phone: '+91 94904 36245' },
+      { name: '+1 404 555 0103', phone: '+1 404 555 0103' },
+      { name: 'Nobody', phone: '' },
+    ]);
+    const { add, already } = newPeople(picked, [{ name: 'Asha', phone: '+14045550101' }, { name: 'nobody', phone: '' }]);
+    expect(add.map((p) => p.name)).toEqual(['Ben', '+1 404 555 0103']);
+    expect(already.map((p) => p.name)).toEqual(['Asha Rao', 'Nobody']);
+    expect(bestPhone(['12', '404 555 0101'])).toBe('404 555 0101');
   });
 });
 

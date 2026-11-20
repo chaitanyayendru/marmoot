@@ -1,9 +1,10 @@
 import { useState, type Dispatch, type FormEvent } from 'react';
-import { ChevronLeft, Plus } from 'lucide-react';
+import { ChevronLeft, Contact, Plus } from 'lucide-react';
 import { go } from '../App.tsx';
 import { APP_NAMES, memberInUse, newMember, railsFor, type Action, type Group, type Member, type PayApp } from '../model.ts';
 import { waNumber } from '../whatsapp.ts';
 import { useAccount } from '../account.tsx';
+import { canPickContacts, newPeople, pickContacts } from '../contacts.ts';
 import { Notice, NotSaving, Sheet } from './bits.tsx';
 
 const FIELDS: { app: PayApp; label: string; placeholder: string }[] = [
@@ -30,6 +31,24 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
       go('/');
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'Could not delete the group.');
+    }
+  }
+
+  const [contactNote, setContactNote] = useState<string | null>(null);
+
+  async function addFromContacts() {
+    setContactNote(null);
+    try {
+      const picked = await pickContacts(true);
+      if (!picked.length) return;
+      const { add, already } = newPeople(picked, group.members);
+      for (const p of add) dispatch({ type: 'addMember', group: group.id, member: newMember(p.name, p.phone) });
+      const parts = [];
+      if (add.length) parts.push(`Added ${add.map((p) => p.name).join(', ')}.`);
+      if (already.length) parts.push(`Already here: ${already.map((p) => p.name).join(', ')}.`);
+      setContactNote(parts.join(' '));
+    } catch (e) {
+      setContactNote(e instanceof Error ? `Couldn't open your contacts: ${e.message}` : "Couldn't open your contacts.");
     }
   }
 
@@ -76,6 +95,14 @@ export function PeopleView({ group, dispatch, saved }: { group: Group; dispatch:
         <input aria-label="New person's name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Add someone" />
         <button className="pill" disabled={!newName.trim()}><Plus size={16} /> Add</button>
       </form>
+      {canPickContacts() ? (
+        <button className="pill wide" onClick={() => void addFromContacts()}>
+          <Contact size={16} /> Add from contacts
+        </button>
+      ) : (
+        <p className="fine">Quicker: tap the person-with-a-plus icon on the group and share its invite link. People add themselves, no numbers to type.</p>
+      )}
+      {contactNote && <Notice>{contactNote}</Notice>}
 
       <section className="stack danger-zone" aria-label="Group settings">
         <label className="field">
@@ -138,7 +165,24 @@ function MemberSheet({ member, isMe, inUse, onSave, onRemove, onClose }: { membe
         </label>
         <label className="field">
           <span>WhatsApp number</span>
-          <input value={draft.phone} inputMode="tel" placeholder="+1 404 555 0101" aria-invalid={badPhone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+          <span className="add-row">
+            <input type="tel" value={draft.phone} inputMode="tel" placeholder="+1 404 555 0101" aria-invalid={badPhone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+            {canPickContacts() && (
+              <button
+                type="button"
+                className="pill"
+                aria-label="Pick from contacts"
+                onClick={() => {
+                  void pickContacts(false).then(
+                    ([c]) => c && setDraft((d) => ({ ...d, phone: c.phone || d.phone, name: d.name.trim() && d.name !== 'You' ? d.name : c.name })),
+                    () => undefined,
+                  );
+                }}
+              >
+                <Contact size={16} />
+              </button>
+            )}
+          </span>
           {badPhone && <span className="warn-text">Include the country code, like +1 or +91.</span>}
         </label>
         <fieldset className="stack tight">
